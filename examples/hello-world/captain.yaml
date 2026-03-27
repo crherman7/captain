@@ -1,0 +1,58 @@
+namespace: hello
+
+cluster:
+  local:
+    context: k3d-hello
+    registry:
+      push: localhost:5001
+      pull: hello-registry:5000
+
+setup:
+  - name: k3d-cluster
+    stacks: [local]
+    check: k3d cluster list -o json | grep -q hello
+    run: k3d cluster create hello --registry-create hello-registry:0.0.0.0:5001 --port 80:80@loadbalancer --wait
+
+  - name: wait-for-coredns
+    check: kubectl get pods -n kube-system -l k8s-app=kube-dns -o jsonpath='{.items[0].status.phase}' | grep -q Running
+    run: kubectl wait --for=condition=ready pod -l k8s-app=kube-dns -n kube-system --timeout=60s
+
+  - name: local-registry
+    stacks: [local]
+    check: curl -sf http://localhost:5001/v2/ > /dev/null
+    run: echo "Waiting for registry..." && sleep 3
+
+  - name: wait-for-traefik
+    check: kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].status.phase}' | grep -q Running
+    run: kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=traefik -n kube-system --timeout=60s
+
+services:
+  postgres:
+    chart: deploy/infra/postgres
+    values:
+      postgres:
+        auth:
+          password: ${env:DB_PASSWORD}
+    exposes:
+      DATABASE_URL: "postgresql://hello:${env:DB_PASSWORD}@{name}:5432/hello?sslmode=disable"
+
+  api:
+    chart: deploy/apps/api
+    build:
+      context: services/api
+      platform: linux/arm64
+    references: [postgres]
+    values:
+      ingress:
+        host: api.127.0.0.1.sslip.io
+
+  web:
+    chart: deploy/apps/web
+    build:
+      context: services/web
+      platform: linux/arm64
+    values:
+      ingress:
+        host: 127.0.0.1.sslip.io
+      api:
+        url: http://api.127.0.0.1.sslip.io

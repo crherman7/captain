@@ -1,0 +1,4 @@
+apiVersion: v2
+name: web
+description: Hello World Frontend
+version: 0.1.0

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hello Captain</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+      background: #0f172a;
+      color: #e2e8f0;
+      display: flex;
+      justify-content: center;
+      padding: 3rem 1rem;
+    }
+    .container { max-width: 480px; width: 100%; }
+    h1 {
+      font-size: 1.75rem;
+      margin-bottom: 0.25rem;
+    }
+    .subtitle {
+      color: #64748b;
+      font-size: 0.875rem;
+      margin-bottom: 2rem;
+    }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      font-size: 0.75rem;
+      padding: 0.25rem 0.625rem;
+      border-radius: 999px;
+      margin-bottom: 1.5rem;
+    }
+    .status.ok { background: #064e3b; color: #6ee7b7; }
+    .status.err { background: #7f1d1d; color: #fca5a5; }
+    .status.loading { background: #1e293b; color: #64748b; }
+    .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .ok .dot { background: #4ade80; }
+    .err .dot { background: #f87171; }
+    .loading .dot { background: #64748b; }
+
+    .form-row {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+    input {
+      flex: 1;
+      padding: 0.5rem 0.75rem;
+      border-radius: 0.5rem;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #e2e8f0;
+      font-size: 0.875rem;
+      outline: none;
+    }
+    input:focus { border-color: #38bdf8; }
+    button {
+      padding: 0.5rem 1rem;
+      border-radius: 0.5rem;
+      border: none;
+      background: #0ea5e9;
+      color: #fff;
+      font-size: 0.875rem;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover { background: #0284c7; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .list { list-style: none; }
+    .list li {
+      padding: 0.75rem;
+      border-radius: 0.5rem;
+      background: #1e293b;
+      margin-bottom: 0.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    .list .msg { color: #f1f5f9; }
+    .list .time {
+      color: #475569;
+      font-size: 0.75rem;
+      white-space: nowrap;
+      margin-left: 1rem;
+    }
+    .empty {
+      color: #475569;
+      text-align: center;
+      padding: 2rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Captain Hello World</h1>
+    <p class="subtitle">API + PostgreSQL + Nginx, deployed with Captain</p>
+    <div id="status" class="status loading"><span class="dot"></span> connecting...</div>
+
+    <form class="form-row" id="form">
+      <input type="text" id="input" placeholder="Type a greeting..." maxlength="200" autocomplete="off">
+      <button type="submit" id="btn">Send</button>
+    </form>
+
+    <ul class="list" id="list"></ul>
+  </div>
+
+  <script>
+    const list = document.getElementById('list');
+    const input = document.getElementById('input');
+    const btn = document.getElementById('btn');
+    const status = document.getElementById('status');
+
+    function setStatus(state, text) {
+      status.className = 'status ' + state;
+      status.innerHTML = '<span class="dot"></span> ' + text;
+    }
+
+    function timeAgo(iso) {
+      const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+      if (s < 60) return 'just now';
+      if (s < 3600) return Math.floor(s / 60) + 'm ago';
+      if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+      return Math.floor(s / 86400) + 'd ago';
+    }
+
+    function renderList(items) {
+      if (!items.length) {
+        list.innerHTML = '<li class="empty">No greetings yet. Add one above.</li>';
+        return;
+      }
+      list.innerHTML = items.map(g =>
+        '<li><span class="msg">' + g.message + '</span><span class="time">' + timeAgo(g.createdAt) + '</span></li>'
+      ).join('');
+    }
+
+    // API base URL — derived from current hostname (api.127.0.0.1.sslip.io)
+    const apiBase = 'http://api.' + location.hostname;
+
+    async function load() {
+      try {
+        const res = await fetch(apiBase + '/api/greetings');
+        if (!res.ok) throw new Error(res.statusText);
+        renderList(await res.json());
+        setStatus('ok', 'connected');
+      } catch (e) {
+        setStatus('err', e.message);
+        list.innerHTML = '<li class="empty">Could not reach API</li>';
+      }
+    }
+
+    document.getElementById('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const msg = input.value.trim();
+      if (!msg) return;
+      btn.disabled = true;
+      try {
+        const res = await fetch(apiBase + '/api/greetings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg }),
+        });
+        if (!res.ok) throw new Error(res.statusText);
+        input.value = '';
+        await load();
+      } catch (e) {
+        setStatus('err', e.message);
+      } finally {
+        btn.disabled = false;
+        input.focus();
+      }
+    });
+
+    load();
+  </script>
+</body>
+</html>

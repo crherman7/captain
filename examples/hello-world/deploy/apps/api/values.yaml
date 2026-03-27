@@ -1,0 +1,5 @@
+image:
+  repository: localhost:5001/hello-api
+  tag: latest
+
+env: {}

@@ -1,0 +1,4 @@
+apiVersion: v2
+name: postgres
+description: PostgreSQL database
+version: 0.1.0
