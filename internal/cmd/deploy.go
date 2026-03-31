@@ -3,11 +3,11 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/christopherherman/captain/internal/build"
-	"github.com/christopherherman/captain/internal/config"
-	"github.com/christopherherman/captain/internal/deploy"
-	"github.com/christopherherman/captain/internal/setup"
-	"github.com/christopherherman/captain/internal/state"
+	"github.com/crherman7/captain/internal/build"
+	"github.com/crherman7/captain/internal/config"
+	"github.com/crherman7/captain/internal/deploy"
+	"github.com/crherman7/captain/internal/setup"
+	"github.com/crherman7/captain/internal/state"
 	"github.com/spf13/cobra"
 )
 

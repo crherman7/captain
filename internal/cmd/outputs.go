@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/christopherherman/captain/internal/config"
-	"github.com/christopherherman/captain/internal/resolver"
+	"github.com/crherman7/captain/internal/config"
+	"github.com/crherman7/captain/internal/resolver"
 	"github.com/spf13/cobra"
 )
 

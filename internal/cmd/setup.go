@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/christopherherman/captain/internal/config"
+	"github.com/crherman7/captain/internal/config"
 	"github.com/spf13/cobra"
 )
 

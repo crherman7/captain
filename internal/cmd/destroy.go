@@ -5,8 +5,8 @@ import (
 	"os"
 	"slices"
 
-	"github.com/christopherherman/captain/internal/config"
-	"github.com/christopherherman/captain/internal/deploy"
+	"github.com/crherman7/captain/internal/config"
+	"github.com/crherman7/captain/internal/deploy"
 	"github.com/spf13/cobra"
 )
 

@@ -1,4 +1,4 @@
-module github.com/christopherherman/captain
+module github.com/crherman7/captain
 
 go 1.25.0
 

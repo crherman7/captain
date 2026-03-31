@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/christopherherman/captain/internal/config"
+	"github.com/crherman7/captain/internal/config"
 )
 
 // Runner executes setup steps before the deploy pipeline.

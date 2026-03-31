@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/christopherherman/captain/internal/config"
+	"github.com/crherman7/captain/internal/config"
 )
 
 func TestRun_CheckPasses_SkipsRun(t *testing.T) {

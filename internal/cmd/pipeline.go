@@ -9,12 +9,12 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/christopherherman/captain/internal/build"
-	"github.com/christopherherman/captain/internal/config"
-	"github.com/christopherherman/captain/internal/deploy"
-	"github.com/christopherherman/captain/internal/graph"
-	"github.com/christopherherman/captain/internal/resolver"
-	"github.com/christopherherman/captain/internal/state"
+	"github.com/crherman7/captain/internal/build"
+	"github.com/crherman7/captain/internal/config"
+	"github.com/crherman7/captain/internal/deploy"
+	"github.com/crherman7/captain/internal/graph"
+	"github.com/crherman7/captain/internal/resolver"
+	"github.com/crherman7/captain/internal/state"
 )
 
 type ActionStatus int
