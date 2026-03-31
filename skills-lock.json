@@ -1,6 +1,16 @@
 {
   "version": 1,
   "skills": {
+    "cli-developer": {
+      "source": "jeffallan/claude-skills",
+      "sourceType": "github",
+      "computedHash": "2eb0cf6f78a8b861b6fb8da535c0737debbda228ac47f7b50594f03c1d5934d7"
+    },
+    "create-readme": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "computedHash": "d0ece1b2164ce1376e4ab6e98d6ac079df3a2a94f5f02224362b6a1ce2516ae9"
+    },
     "golang-pro": {
       "source": "jeffallan/claude-skills",
       "sourceType": "github",

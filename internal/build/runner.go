@@ -11,7 +11,10 @@ import (
 	"strings"
 )
 
-var dockerStepRe = regexp.MustCompile(`^#\d+\s+(.+)`)
+var (
+	dockerStepRe   = regexp.MustCompile(`^#\d+\s+(.+)`)
+	dockerTargetRe = regexp.MustCompile(`\[([a-zA-Z0-9_-]+)\s+`)
+)
 
 // ExecRunner executes commands, capturing output and optionally streaming lines
 // to an OnOutput callback.
@@ -22,7 +25,6 @@ type ExecRunner struct {
 func (e *ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 
-	// If no callback, just capture everything
 	if e.OnOutput == nil {
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -31,7 +33,6 @@ func (e *ExecRunner) Run(ctx context.Context, name string, args ...string) ([]by
 		return out, nil
 	}
 
-	// Stream stderr line-by-line to the callback, capture everything for error reporting
 	var buf bytes.Buffer
 
 	stderr, err := cmd.StderrPipe()
@@ -48,12 +49,10 @@ func (e *ExecRunner) Run(ctx context.Context, name string, args ...string) ([]by
 		return nil, fmt.Errorf("starting %s: %w", name, err)
 	}
 
-	// Read stdout into buffer
 	go func() {
 		_, _ = io.Copy(&buf, stdout)
 	}()
 
-	// Scan stderr, feed lines to callback and buffer
 	scanner := bufio.NewScanner(stderr)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -73,24 +72,46 @@ func (e *ExecRunner) Run(ctx context.Context, name string, args ...string) ([]by
 }
 
 // parseBuildLine extracts a human-readable status from a docker buildx output line.
+// For bake, the target name is embedded in the step: "[api build 6/6] RUN ..."
+// Returns "target:message" if a target is found, or just "message" otherwise.
 func parseBuildLine(line string) string {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return ""
 	}
 
-	// Docker buildx lines: "#12 [build 6/6] RUN go build..."
 	if m := dockerStepRe.FindStringSubmatch(line); len(m) > 1 {
 		msg := m[1]
-		// Skip noisy lines
 		if strings.HasPrefix(msg, "sha256:") || strings.HasPrefix(msg, "[auth]") {
 			return ""
 		}
-		// Trim "DONE" / "CACHED" suffixes for cleaner display
 		msg = strings.TrimSuffix(msg, " done")
 		msg = strings.TrimSuffix(msg, " DONE")
+
+		// Extract target name from "[targetname step]" pattern
+		if tm := dockerTargetRe.FindStringSubmatch(msg); len(tm) > 1 {
+			target := tm[1]
+			// Skip internal docker stages like "internal"
+			if target != "internal" {
+				return target + ":" + msg
+			}
+		}
+
 		return msg
 	}
 
 	return ""
+}
+
+// ParseTargetMessage splits a "target:message" string from parseBuildLine.
+// Returns (target, message). If no target prefix, returns ("", original).
+func ParseTargetMessage(s string) (string, string) {
+	if idx := strings.Index(s, ":"); idx > 0 {
+		candidate := s[:idx]
+		// Only treat as target if it's a simple name (no spaces, no brackets)
+		if !strings.ContainsAny(candidate, " []") {
+			return candidate, s[idx+1:]
+		}
+	}
+	return "", s
 }

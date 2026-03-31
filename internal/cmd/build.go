@@ -1,9 +1,6 @@
-package cli
+package cmd
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/christopherherman/captain/internal/build"
 	"github.com/christopherherman/captain/internal/config"
 	"github.com/christopherherman/captain/internal/state"
@@ -37,29 +34,45 @@ func newBuildCmd() *cobra.Command {
 				return err
 			}
 
-			spin := NewSpinner(os.Stderr)
-			printHeader("Build")
+			ui := NewUI()
+			defer ui.Flush()
+			ui.Header("Build")
 
-			built := 0
+			var targets []build.Target
 			for _, a := range actions {
-				if !a.HasBuild {
-					continue
+				if a.HasBuild {
+					targets = append(targets, a.BuildTarget)
 				}
-				spin.Start(a.ServiceName, "building...")
-				if err := builder.Build(cmd.Context(), a.BuildTarget); err != nil {
-					spin.Stop("✗", "build failed")
-					printError(err)
-					return err
-				}
-				spin.Stop("✔", "built")
-				built++
 			}
 
-			if built == 0 {
-				fmt.Fprintln(os.Stderr, "  No services have build configs") //nolint:errcheck
+			if len(targets) == 0 {
+				ui.ServiceSkip("build", "no services have build configs")
+				return nil
 			}
 
-			fmt.Fprintln(os.Stderr) //nolint:errcheck
+			for _, t := range targets {
+				ui.ServiceStart(t.Name, "building...")
+			}
+
+			builder.OnOutput = func(msg string) {
+				target, step := build.ParseTargetMessage(msg)
+				if target != "" {
+					ui.ServiceUpdate(target, "building "+step)
+				}
+			}
+
+			if err := builder.Bake(cmd.Context(), targets); err != nil {
+				for _, t := range targets {
+					ui.ServiceDone(t.Name, "✗", "build failed")
+				}
+				ui.Error(err)
+				return err
+			}
+
+			for _, t := range targets {
+				ui.ServiceDone(t.Name, "✔", "built")
+			}
+
 			return nil
 		},
 	}

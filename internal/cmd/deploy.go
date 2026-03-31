@@ -1,8 +1,7 @@
-package cli
+package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/christopherherman/captain/internal/build"
 	"github.com/christopherherman/captain/internal/config"
@@ -26,12 +25,12 @@ func newDeployCmd() *cobra.Command {
 			}
 
 			cluster := cfg.GetCluster(stack)
-			spin := NewSpinner(os.Stderr)
+			ui := NewUI()
+			defer ui.Flush()
 
-			// Run setup steps before anything else
 			if len(cfg.Setup) > 0 {
-				printHeader("Setup")
-				if err := runSetup(cmd, cfg, spin); err != nil {
+				ui.Header("Setup")
+				if err := runSetup(cmd, cfg, ui); err != nil {
 					return err
 				}
 			}
@@ -64,16 +63,15 @@ func newDeployCmd() *cobra.Command {
 			}
 
 			if changed == 0 {
-				printHeader("Deploy")
+				ui.Header("Deploy")
 				for _, a := range actions {
-					spin.Skip(a.ServiceName, "unchanged")
+					ui.ServiceSkip("deploy/"+a.ServiceName, "unchanged")
 				}
 				return nil
 			}
 
-			printHeader("Deploy")
-			if err := p.Execute(cmd.Context(), actions, spin); err != nil {
-				printError(err)
+			if err := p.Execute(cmd.Context(), actions, ui); err != nil {
+				ui.Error(err)
 				return err
 			}
 
@@ -81,18 +79,17 @@ func newDeployCmd() *cobra.Command {
 				return fmt.Errorf("saving state: %w", err)
 			}
 
-			fmt.Fprintln(os.Stderr) //nolint:errcheck
 			return nil
 		},
 	}
 }
 
-func runSetup(cmd *cobra.Command, cfg *config.Config, spin *Spinner) error {
+func runSetup(cmd *cobra.Command, cfg *config.Config, ui UI) error {
 	r := setup.NewRunner(stack)
 	return r.Run(cmd.Context(), cfg.Setup,
-		func(name string) { spin.Skip(name, "ready") },
-		func(name string) { spin.Start(name, "running...") },
-		func(name string) { spin.Stop("✔", "done") },
+		func(name string) { ui.ServiceSkip(name, "ready") },
+		func(name string) { ui.ServiceStart(name, "running...") },
+		func(name string) { ui.ServiceDone(name, "✔", "done") },
 	)
 }
 

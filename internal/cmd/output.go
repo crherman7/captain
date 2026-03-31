@@ -1,32 +1,15 @@
-package cli
+package cmd
 
 import (
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 )
-
-const (
-	colorReset  = "\033[0m"
-	colorRed    = "\033[31m"
-	colorGreen  = "\033[32m"
-	colorYellow = "\033[33m"
-	colorCyan   = "\033[36m"
-	colorBold   = "\033[1m"
-	colorDim    = "\033[2m"
-)
-
-func printHeader(msg string) {
-	fmt.Fprintf(os.Stderr, "\n%s%s%s\n\n", colorBold, msg, colorReset) //nolint:errcheck
-}
-
-func printError(err error) {
-	fmt.Fprintf(os.Stderr, "\n%s✗ Error:%s %v\n", colorRed, colorReset, err) //nolint:errcheck
-}
 
 func printOutput(name, key, value string) {
-	fmt.Fprintf(os.Stdout, "  %s%s%s.%s → %s\n", colorCyan, name, colorReset, key, value) //nolint:errcheck
+	fmt.Fprintf(os.Stdout, "  %s.%s → %s\n", name, key, value) //nolint:errcheck
 }
 
 func printTable(w io.Writer, headers []string, rows [][]string) {
@@ -60,4 +43,20 @@ func printTable(w io.Writer, headers []string, rows [][]string) {
 		}
 		fmt.Fprintln(w) //nolint:errcheck
 	}
+}
+
+// displayName strips a "phase/" prefix from a key for display.
+// e.g., "build/api" -> "api", "api" -> "api"
+func displayName(key string) string {
+	if idx := strings.Index(key, "/"); idx >= 0 {
+		return key[idx+1:]
+	}
+	return key
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }

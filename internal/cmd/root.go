@@ -1,8 +1,11 @@
-package cli
+package cmd
 
 import (
 	"github.com/spf13/cobra"
 )
+
+// Version is set at build time via -ldflags.
+var Version = "dev"
 
 var (
 	cfgFile   string
@@ -12,9 +15,10 @@ var (
 
 func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "captain",
-		Short: "Deploy services to Kubernetes via Helm",
-		Long:  "Captain orchestrates Docker builds and Helm deployments from a single YAML config.",
+		Use:           "captain",
+		Short:         "Deploy services to Kubernetes via Helm",
+		Long:          "Captain orchestrates Docker builds and Helm deployments from a single YAML config.",
+		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

@@ -1,4 +1,4 @@
-package cli
+package cmd
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/christopherherman/captain/internal/build"
 	"github.com/christopherherman/captain/internal/config"
@@ -42,7 +44,7 @@ type PlannedAction struct {
 	Hash          string
 	BuildHash     string
 	Values        map[string]interface{}
-	EnvSecretData map[string]string // merged exposes + secrets for <name>-env K8s secret
+	EnvSecretData map[string]string
 	HasBuild      bool
 	NeedsBuild    bool
 	BuildTarget   build.Target
@@ -95,18 +97,7 @@ func (p *Pipeline) buildGraph() (*graph.Graph, error) {
 }
 
 func (p *Pipeline) includeService(svc config.ServiceConfig) bool {
-	if svc.Disabled {
-		return false
-	}
-	if p.Stack == "" || len(svc.Stacks) == 0 {
-		return true
-	}
-	for _, s := range svc.Stacks {
-		if s == p.Stack {
-			return true
-		}
-	}
-	return false
+	return includeService(svc, p.Stack)
 }
 
 func (p *Pipeline) pushRegistry() string {
@@ -126,6 +117,13 @@ func (p *Pipeline) pullRegistry() string {
 func (p *Pipeline) imagePullSecretName() string {
 	if p.Cluster != nil && p.Cluster.Registry != nil && p.Cluster.Registry.NeedsSecret() {
 		return p.Cluster.Registry.SecretName()
+	}
+	return ""
+}
+
+func (p *Pipeline) kubeContext() string {
+	if p.Cluster != nil {
+		return p.Cluster.Context
 	}
 	return ""
 }
@@ -153,7 +151,6 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 			Exposed:     make(map[string]string),
 		}
 
-		// Merge exposes from referenced services
 		for _, ref := range svc.References {
 			if exposed, ok := exposedValues[ref]; ok {
 				for k, v := range exposed {
@@ -162,7 +159,6 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 			}
 		}
 
-		// Start with captain.yaml values
 		resolvedValues := make(map[string]interface{})
 		if svc.Values != nil {
 			resolvedValues, err = p.Resolver.ResolveMap(svc.Values, ctx)
@@ -171,14 +167,12 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 			}
 		}
 
-		// Merge per-stack values file (values-<stack>.yaml) if it exists
 		if p.Stack != "" {
 			stackVals, err := config.LoadStackValues(svc.Chart, p.Stack)
 			if err != nil {
 				return nil, fmt.Errorf("service %q stack values: %w", name, err)
 			}
 			if stackVals != nil {
-				// Resolve env vars in stack values too
 				resolvedStackVals, err := p.Resolver.ResolveMap(stackVals, ctx)
 				if err != nil {
 					return nil, fmt.Errorf("service %q stack values resolve: %w", name, err)
@@ -187,7 +181,6 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 			}
 		}
 
-		// Inject referenced exposes into values under "env" key
 		if len(ctx.Exposed) > 0 {
 			envMap := make(map[string]interface{})
 			if existing, ok := resolvedValues["env"]; ok {
@@ -203,20 +196,6 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 			resolvedValues["env"] = envMap
 		}
 
-		// Resolve and inject secrets
-		if len(svc.Secrets) > 0 {
-			resolvedSecrets, err := p.Resolver.ResolveStringMap(svc.Secrets, ctx)
-			if err != nil {
-				return nil, fmt.Errorf("service %q secrets: %w", name, err)
-			}
-			secretsMap := make(map[string]interface{}, len(resolvedSecrets))
-			for k, v := range resolvedSecrets {
-				secretsMap[k] = v
-			}
-			resolvedValues["secrets"] = secretsMap
-		}
-
-		// Build env secret data (exposes from references + service secrets)
 		envSecretData := make(map[string]string)
 		for k, v := range ctx.Exposed {
 			envSecretData[k] = v
@@ -226,17 +205,18 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 			if err != nil {
 				return nil, fmt.Errorf("service %q secrets: %w", name, err)
 			}
+			secretsMap := make(map[string]interface{}, len(resolvedSecrets))
 			for k, v := range resolvedSecrets {
 				envSecretData[k] = v
+				secretsMap[k] = v
 			}
+			resolvedValues["secrets"] = secretsMap
 		}
 
-		// Inject imagePullSecrets if registry has credentials
 		if secretName := p.imagePullSecretName(); secretName != "" {
 			resolvedValues["imagePullSecrets"] = []interface{}{secretName}
 		}
 
-		// Resolve exposes and store for downstream
 		if len(svc.Exposes) > 0 {
 			resolvedExposes, err := p.Resolver.ResolveStringMap(svc.Exposes, ctx)
 			if err != nil {
@@ -245,7 +225,6 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 			exposedValues[name] = resolvedExposes
 		}
 
-		// Compute hashes and image tag
 		hasBuild := svc.Build != nil
 		var buildTarget build.Target
 		var buildHash string
@@ -258,7 +237,6 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 
 			imageTag := buildHash[:12]
 
-			// Determine push image ref
 			var pushRef string
 			if svc.Build.Image != "" {
 				pushRef = svc.Build.Image
@@ -283,7 +261,6 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 				Platform:   svc.Build.Platform,
 			}
 
-			// Determine pull image repository
 			pullRepo := ""
 			if img, ok := resolvedValues["image"]; ok {
 				if m, ok := img.(map[string]interface{}); ok {
@@ -300,7 +277,6 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 				}
 			}
 
-			// Auto-inject image.tag and image.repository
 			imageMap := make(map[string]interface{})
 			if existing, ok := resolvedValues["image"]; ok {
 				if m, ok := existing.(map[string]interface{}); ok {
@@ -348,96 +324,136 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 	return actions, nil
 }
 
-// Execute runs the full build + deploy pipeline.
-func (p *Pipeline) Execute(ctx context.Context, actions []PlannedAction, spin *Spinner) error {
+// Execute runs the full build + deploy pipeline with parallel layer deploys.
+func (p *Pipeline) Execute(ctx context.Context, actions []PlannedAction, ui UI) error {
 	// Ensure registry secret exists before deploying
 	if p.Cluster != nil && p.Cluster.Registry != nil && p.Cluster.Registry.NeedsSecret() {
-		kubeCtx := ""
-		if p.Cluster != nil {
-			kubeCtx = p.Cluster.Context
-		}
-		spin.Start("registry", "creating secret...")
-		secretName, err := deploy.EnsureRegistrySecret(ctx, p.Cluster.Registry, p.Config.Namespace, kubeCtx)
+		ui.ServiceStart("registry", "creating secret...")
+		secretName, err := deploy.EnsureRegistrySecret(ctx, p.Cluster.Registry, p.Config.Namespace, p.kubeContext())
 		if err != nil {
-			spin.Stop("✗", "failed")
+			ui.ServiceDone("registry", "✗", "failed")
 			return fmt.Errorf("registry secret: %w", err)
 		}
-		spin.Stop("✔", secretName)
+		ui.ServiceDone("registry", "✔", secretName)
 	}
 
-	// Collect all build targets and bake them in parallel
+	// Bake all builds in parallel with per-target status
 	var buildTargets []build.Target
-	var buildNames []string
 	for _, action := range actions {
 		if action.NeedsBuild {
 			buildTargets = append(buildTargets, action.BuildTarget)
-			buildNames = append(buildNames, action.ServiceName)
 		}
 	}
 
 	if len(buildTargets) > 0 {
-		label := strings.Join(buildNames, ", ")
-		spin.Start("build", fmt.Sprintf("building %d services (%s)...", len(buildTargets), label))
-		if b, ok := p.Builder.(*build.BuildxBuilder); ok {
-			b.OnOutput = func(msg string) { spin.Update("building " + msg) }
+		ui.Header("Build")
+		for _, t := range buildTargets {
+			ui.ServiceStart("build/"+t.Name, "building...")
 		}
+
+		if b, ok := p.Builder.(*build.BuildxBuilder); ok {
+			b.OnOutput = func(msg string) {
+				target, step := build.ParseTargetMessage(msg)
+				if target != "" {
+					ui.ServiceUpdate("build/"+target, "building "+step)
+				}
+			}
+		}
+
 		if err := p.Builder.Bake(ctx, buildTargets); err != nil {
-			spin.Stop("✗", "build failed")
+			for _, t := range buildTargets {
+				ui.ServiceDone("build/"+t.Name, "✗", "build failed")
+			}
 			return fmt.Errorf("building: %w", err)
 		}
+
 		if b, ok := p.Builder.(*build.BuildxBuilder); ok {
 			b.OnOutput = nil
 		}
-		spin.Stop("✔", fmt.Sprintf("built %d services", len(buildTargets)))
+
+		for _, t := range buildTargets {
+			ui.ServiceDone("build/"+t.Name, "✔", "built")
+		}
 	}
 
-	// Deploy services in order
-	for _, action := range actions {
-		if action.Status == StatusUnchanged {
-			spin.Skip(action.ServiceName, "unchanged")
-			continue
-		}
+	// Build action lookup and graph for layer-based parallel deploys
+	actionMap := make(map[string]*PlannedAction, len(actions))
+	for i := range actions {
+		actionMap[actions[i].ServiceName] = &actions[i]
+	}
 
-		// Always create <name>-env secret — charts expect it to exist
-		{
-			kubeCtx := ""
-			if p.Cluster != nil {
-				kubeCtx = p.Cluster.Context
+	g, err := p.buildGraph()
+	if err != nil {
+		return err
+	}
+
+	layers, err := g.Layers()
+	if err != nil {
+		return err
+	}
+
+	ui.Header("Deploy")
+
+	// Deploy layer by layer — services within a layer run in parallel
+	for _, layer := range layers {
+		eg, layerCtx := errgroup.WithContext(ctx)
+
+		for _, name := range layer {
+			action, ok := actionMap[name]
+			if !ok {
+				continue
 			}
-			if err := deploy.EnsureAppSecret(ctx, action.ServiceName, p.Config.Namespace, kubeCtx, action.EnvSecretData); err != nil {
-				spin.Stop("✗", "secret failed")
-				return fmt.Errorf("creating secret for %s: %w", action.ServiceName, err)
+
+			if action.Status == StatusUnchanged {
+				ui.ServiceSkip("deploy/"+action.ServiceName, "unchanged")
+				continue
 			}
+
+			eg.Go(func() error {
+				key := "deploy/" + action.ServiceName
+
+				// Create <name>-env secret
+				if err := deploy.EnsureAppSecret(layerCtx, action.ServiceName, p.Config.Namespace, p.kubeContext(), action.EnvSecretData); err != nil {
+					ui.ServiceDone(key, "✗", "secret failed")
+					return fmt.Errorf("creating secret for %s: %w", action.ServiceName, err)
+				}
+
+				svc := p.Config.Services[action.ServiceName]
+				rel := deploy.Release{
+					Name:      action.ServiceName,
+					Namespace: p.Config.Namespace,
+					Chart:     svc.Chart,
+					Values:    action.Values,
+				}
+
+				ui.ServiceStart(key, "deploying...")
+
+				deployer := deploy.NewHelmDeployer(p.kubeContext())
+				deployer.OnOutput = func(msg string) {
+					ui.ServiceUpdate(key, "deploying "+msg)
+				}
+
+				if err := deployer.Deploy(layerCtx, rel); err != nil {
+					ui.ServiceDone(key, "✗", "deploy failed")
+					return fmt.Errorf("deploying %s: %w", action.ServiceName, err)
+				}
+
+				ui.ServiceDone(key, "✔", "deployed")
+
+				p.State.Update(action.ServiceName, state.ServiceState{
+					Hash:       action.Hash,
+					BuildHash:  action.BuildHash,
+					DeployedAt: time.Now(),
+					ImageTag:   action.BuildTarget.ImageTag,
+				})
+
+				return nil
+			})
 		}
 
-		svc := p.Config.Services[action.ServiceName]
-		rel := deploy.Release{
-			Name:      action.ServiceName,
-			Namespace: p.Config.Namespace,
-			Chart:     svc.Chart,
-			Values:    action.Values,
+		if err := eg.Wait(); err != nil {
+			return err
 		}
-
-		spin.Start(action.ServiceName, "deploying...")
-		if d, ok := p.Deployer.(*deploy.HelmDeployer); ok {
-			d.OnOutput = func(msg string) { spin.Update("deploying " + msg) }
-		}
-		if err := p.Deployer.Deploy(ctx, rel); err != nil {
-			spin.Stop("✗", "deploy failed")
-			return fmt.Errorf("deploying %s: %w", action.ServiceName, err)
-		}
-		if d, ok := p.Deployer.(*deploy.HelmDeployer); ok {
-			d.OnOutput = nil
-		}
-		spin.Stop("✔", "deployed")
-
-		// Update state
-		p.State.Update(action.ServiceName, state.ServiceState{
-			Hash:       action.Hash,
-			BuildHash:  action.BuildHash,
-			DeployedAt: time.Now(),
-			ImageTag:   action.BuildTarget.ImageTag,
-		})
 	}
 
 	return nil

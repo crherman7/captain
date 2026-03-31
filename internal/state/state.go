@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -15,6 +16,7 @@ type ServiceState struct {
 }
 
 type State struct {
+	mu       sync.RWMutex
 	Services map[string]ServiceState `json:"services"`
 }
 
@@ -44,7 +46,9 @@ func Load(path string) (*State, error) {
 }
 
 func (s *State) Save(path string) error {
+	s.mu.RLock()
 	data, err := json.MarshalIndent(s, "", "  ")
+	s.mu.RUnlock()
 	if err != nil {
 		return fmt.Errorf("marshaling state: %w", err)
 	}
@@ -55,6 +59,9 @@ func (s *State) Save(path string) error {
 }
 
 func (s *State) HasChanged(name, hash string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	svc, ok := s.Services[name]
 	if !ok {
 		return true
@@ -63,10 +70,16 @@ func (s *State) HasChanged(name, hash string) bool {
 }
 
 func (s *State) Update(name string, ss ServiceState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.Services[name] = ss
 }
 
 func (s *State) Get(name string) (ServiceState, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	ss, ok := s.Services[name]
 	return ss, ok
 }

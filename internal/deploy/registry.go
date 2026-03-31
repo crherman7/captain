@@ -44,7 +44,7 @@ func EnsureRegistrySecret(ctx context.Context, reg *config.RegistryConfig, names
 	_, err = clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
 	if k8serrors.IsNotFound(err) {
 		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
-		if _, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {
+		if _, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil && !k8serrors.IsAlreadyExists(err) {
 			return "", fmt.Errorf("creating namespace %s: %w", namespace, err)
 		}
 	} else if err != nil {

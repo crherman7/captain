@@ -1,6 +1,7 @@
-package cli
+package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/christopherherman/captain/internal/build"
@@ -40,7 +41,7 @@ func newDiffCmd() *cobra.Command {
 				rows = append(rows, []string{a.ServiceName, a.Status.String()})
 			}
 
-			printHeader("Service Status")
+			fmt.Fprintln(os.Stderr) //nolint:errcheck
 			printTable(os.Stdout, []string{"Service", "Status"}, rows)
 
 			return nil

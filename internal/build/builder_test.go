@@ -93,3 +93,39 @@ func TestBuildxBuilder_Error(t *testing.T) {
 	}
 }
 
+func TestShouldPush(t *testing.T) {
+	tests := []struct {
+		name     string
+		imageTag string
+		want     bool
+	}{
+		{
+			name:     "local image without registry",
+			imageTag: "api:v1",
+			want:     false,
+		},
+		{
+			name:     "localhost registry",
+			imageTag: "localhost:5001/api:latest",
+			want:     true,
+		},
+		{
+			name:     "dotted registry host",
+			imageTag: "registry.example.com/myapp:tag",
+			want:     true,
+		},
+		{
+			name:     "host port registry without dot",
+			imageTag: "registry:5000/myapp:tag",
+			want:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldPush(tt.imageTag); got != tt.want {
+				t.Fatalf("shouldPush(%q) = %t, want %t", tt.imageTag, got, tt.want)
+			}
+		})
+	}
+}

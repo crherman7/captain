@@ -180,6 +180,17 @@ func (b *BuildxBuilder) Bake(ctx context.Context, targets []Target) error {
 	return nil
 }
 
+// shouldPush returns true if the image tag references a remote registry.
+// It checks whether the first path segment looks like a registry hostname
+// (contains a dot or is "localhost"), indicating the image should be pushed.
 func shouldPush(imageTag string) bool {
-	return imageTag != "" && strings.Contains(strings.Split(imageTag, "/")[0], ":")
+	if imageTag == "" {
+		return false
+	}
+	parts := strings.SplitN(imageTag, "/", 2)
+	if len(parts) < 2 {
+		return false // no slash means local image like "myapp:v1"
+	}
+	host := parts[0]
+	return strings.Contains(host, ".") || strings.Contains(host, ":") || host == "localhost"
 }

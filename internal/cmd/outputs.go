@@ -1,6 +1,7 @@
-package cli
+package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/christopherherman/captain/internal/config"
@@ -23,7 +24,7 @@ func newOutputsCmd() *cobra.Command {
 
 			r := resolver.New(os.LookupEnv)
 
-			printHeader("Service Outputs")
+			fmt.Fprintln(os.Stderr) //nolint:errcheck
 
 			for name, svc := range cfg.Services {
 				if len(svc.Exposes) == 0 {
@@ -37,7 +38,7 @@ func newOutputsCmd() *cobra.Command {
 
 				resolved, err := r.ResolveStringMap(svc.Exposes, ctx)
 				if err != nil {
-					printError(err)
+					fmt.Fprintf(os.Stderr, "  error resolving %s: %v\n", name, err) //nolint:errcheck
 					continue
 				}
 

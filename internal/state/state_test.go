@@ -3,6 +3,8 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -61,6 +63,36 @@ func TestHasChanged(t *testing.T) {
 	}
 	if !s.HasChanged("unknown", "abc123") {
 		t.Error("expected changed for unknown service")
+	}
+}
+
+func TestUpdateConcurrent(t *testing.T) {
+	s := New()
+
+	const services = 64
+
+	var wg sync.WaitGroup
+	wg.Add(services)
+
+	for i := range services {
+		go func(i int) {
+			defer wg.Done()
+
+			name := "svc-" + strconv.Itoa(i)
+			s.Update(name, ServiceState{
+				Hash:       "hash-" + strconv.Itoa(i),
+				DeployedAt: time.Now(),
+			})
+		}(i)
+	}
+
+	wg.Wait()
+
+	for i := range services {
+		name := "svc-" + strconv.Itoa(i)
+		if _, ok := s.Get(name); !ok {
+			t.Fatalf("missing service %q after concurrent updates", name)
+		}
 	}
 }
 

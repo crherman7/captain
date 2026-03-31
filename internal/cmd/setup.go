@@ -1,9 +1,6 @@
-package cli
+package cmd
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/christopherherman/captain/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -22,18 +19,17 @@ func newSetupCmd() *cobra.Command {
 			}
 
 			if len(cfg.Setup) == 0 {
-				printHeader("No setup steps defined")
 				return nil
 			}
 
-			spin := NewSpinner(os.Stderr)
-			printHeader("Setup")
-			if err := runSetup(cmd, cfg, spin); err != nil {
-				printError(err)
+			ui := NewUI()
+			defer ui.Flush()
+			ui.Header("Setup")
+			if err := runSetup(cmd, cfg, ui); err != nil {
+				ui.Error(err)
 				return err
 			}
 
-			fmt.Fprintln(os.Stderr) //nolint:errcheck
 			return nil
 		},
 	}
