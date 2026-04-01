@@ -16,6 +16,7 @@ type Target struct {
 	ImageTag   string
 	Platform   string
 	BuildArgs  map[string]string
+	CacheRef   string
 }
 
 type Builder interface {
@@ -53,6 +54,12 @@ func (b *BuildxBuilder) Build(ctx context.Context, target Target) error {
 
 	for k, v := range target.BuildArgs {
 		args = append(args, "--build-arg", fmt.Sprintf("%s=%s", k, v))
+	}
+
+	if target.CacheRef != "" {
+		from, to := cacheRefArgs(target.CacheRef)
+		args = append(args, "--cache-from", from)
+		args = append(args, "--cache-to", to)
 	}
 
 	if shouldPush(target.ImageTag) {
@@ -98,6 +105,8 @@ type bakeTarget struct {
 	Platforms  []string          `json:"platforms,omitempty"`
 	Args       map[string]string `json:"args,omitempty"`
 	Output     []string          `json:"output,omitempty"`
+	CacheFrom  []string          `json:"cache-from,omitempty"`
+	CacheTo    []string          `json:"cache-to,omitempty"`
 }
 
 // Bake builds multiple targets in parallel using docker buildx bake.
@@ -141,6 +150,11 @@ func (b *BuildxBuilder) Bake(ctx context.Context, targets []Target) error {
 		} else {
 			bt.Output = []string{"type=docker"}
 		}
+		if t.CacheRef != "" {
+			from, to := cacheRefArgs(t.CacheRef)
+			bt.CacheFrom = []string{from}
+			bt.CacheTo = []string{to}
+		}
 		bf.Target[t.Name] = bt
 	}
 
@@ -178,6 +192,11 @@ func (b *BuildxBuilder) Bake(ctx context.Context, targets []Target) error {
 		return fmt.Errorf("bake: %w", err)
 	}
 	return nil
+}
+
+// cacheRefArgs returns the --cache-from and --cache-to values for a registry cache ref.
+func cacheRefArgs(ref string) (from, to string) {
+	return "type=registry,ref=" + ref, "type=registry,ref=" + ref + ",mode=max"
 }
 
 // shouldPush returns true if the image tag references a remote registry.

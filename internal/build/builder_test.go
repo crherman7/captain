@@ -80,6 +80,48 @@ func TestBuildxBuilder_WithDockerfileAndPlatform(t *testing.T) {
 	}
 }
 
+func TestBuildxBuilder_WithCacheRef(t *testing.T) {
+	runner := &mockRunner{}
+	b := NewBuildxBuilder(runner)
+
+	err := b.Build(context.Background(), Target{
+		Name:     "api",
+		Context:  ".",
+		ImageTag: "registry.example.com/api:v1",
+		CacheRef: "registry.example.com/api:cache",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	args := strings.Join(runner.calls[0].Args, " ")
+	if !strings.Contains(args, "--cache-from type=registry,ref=registry.example.com/api:cache") {
+		t.Errorf("expected --cache-from in args: %s", args)
+	}
+	if !strings.Contains(args, "--cache-to type=registry,ref=registry.example.com/api:cache,mode=max") {
+		t.Errorf("expected --cache-to in args: %s", args)
+	}
+}
+
+func TestBuildxBuilder_NoCacheRefByDefault(t *testing.T) {
+	runner := &mockRunner{}
+	b := NewBuildxBuilder(runner)
+
+	err := b.Build(context.Background(), Target{
+		Name:     "api",
+		Context:  ".",
+		ImageTag: "registry.example.com/api:v1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	args := strings.Join(runner.calls[0].Args, " ")
+	if strings.Contains(args, "--cache-from") || strings.Contains(args, "--cache-to") {
+		t.Errorf("expected no cache flags when CacheRef is empty: %s", args)
+	}
+}
+
 func TestBuildxBuilder_Error(t *testing.T) {
 	runner := &mockRunner{err: fmt.Errorf("build failed")}
 	b := NewBuildxBuilder(runner)

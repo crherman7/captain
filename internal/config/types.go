@@ -71,4 +71,5 @@ type BuildConfig struct {
 	Target     string   `yaml:"target,omitempty"`
 	Platform   string   `yaml:"platform,omitempty"`
 	Watch      []string `yaml:"watch,omitempty"`
+	CacheRef   string   `yaml:"cache_ref,omitempty"`
 }

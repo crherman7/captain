@@ -259,6 +259,7 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 				Dockerfile: svc.Build.Dockerfile,
 				ImageTag:   pushRef,
 				Platform:   svc.Build.Platform,
+				CacheRef:   svc.Build.CacheRef,
 			}
 
 			pullRepo := ""
