@@ -128,6 +128,19 @@ func (p *Pipeline) kubeContext() string {
 	return ""
 }
 
+func (p *Pipeline) buildPlatform(svcPlatform []string) []string {
+	if len(svcPlatform) > 0 {
+		return svcPlatform
+	}
+	if p.Cluster != nil && len(p.Cluster.Platform) > 0 {
+		return p.Cluster.Platform
+	}
+	if env := os.Getenv("DOCKER_DEFAULT_PLATFORM"); env != "" {
+		return []string{env}
+	}
+	return nil
+}
+
 // Plan resolves all services and computes what needs to change.
 func (p *Pipeline) Plan() ([]PlannedAction, error) {
 	g, err := p.buildGraph()
@@ -258,7 +271,7 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 				Context:    svc.Build.Context,
 				Dockerfile: svc.Build.Dockerfile,
 				ImageTag:   pushRef,
-				Platform:   svc.Build.Platform,
+				Platform:   p.buildPlatform(svc.Build.Platform),
 				CacheRef:   svc.Build.CacheRef,
 			}
 

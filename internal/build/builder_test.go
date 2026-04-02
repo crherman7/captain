@@ -64,7 +64,7 @@ func TestBuildxBuilder_WithDockerfileAndPlatform(t *testing.T) {
 		Name:       "api",
 		Context:    ".",
 		Dockerfile: "Dockerfile.prod",
-		Platform:   "linux/amd64",
+		Platform:   []string{"linux/amd64"},
 		ImageTag:   "api:v1",
 	})
 	if err != nil {

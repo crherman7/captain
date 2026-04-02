@@ -21,6 +21,7 @@ type ClusterConfig struct {
 	Context  string          `yaml:"context,omitempty"`
 	Provider string          `yaml:"provider,omitempty"`
 	Registry *RegistryConfig `yaml:"registry,omitempty"`
+	Platform []string        `yaml:"platform,omitempty"`
 }
 
 type RegistryConfig struct {
@@ -69,7 +70,7 @@ type BuildConfig struct {
 	Dockerfile string   `yaml:"dockerfile,omitempty"`
 	Image      string   `yaml:"image,omitempty"`
 	Target     string   `yaml:"target,omitempty"`
-	Platform   string   `yaml:"platform,omitempty"`
+	Platform   []string `yaml:"platform,omitempty"`
 	Watch      []string `yaml:"watch,omitempty"`
 	CacheRef   string   `yaml:"cache_ref,omitempty"`
 }

@@ -14,7 +14,7 @@ type Target struct {
 	Context    string
 	Dockerfile string
 	ImageTag   string
-	Platform   string
+	Platform   []string
 	BuildArgs  map[string]string
 	CacheRef   string
 }
@@ -48,8 +48,8 @@ func (b *BuildxBuilder) Build(ctx context.Context, target Target) error {
 		args = append(args, "--file", target.Dockerfile)
 	}
 
-	if target.Platform != "" {
-		args = append(args, "--platform", target.Platform)
+	if len(target.Platform) > 0 {
+		args = append(args, "--platform", strings.Join(target.Platform, ","))
 	}
 
 	for k, v := range target.BuildArgs {
@@ -139,8 +139,8 @@ func (b *BuildxBuilder) Bake(ctx context.Context, targets []Target) error {
 		if t.Dockerfile != "" {
 			bt.Dockerfile = t.Dockerfile
 		}
-		if t.Platform != "" {
-			bt.Platforms = []string{t.Platform}
+		if len(t.Platform) > 0 {
+			bt.Platforms = t.Platform
 		}
 		if len(t.BuildArgs) > 0 {
 			bt.Args = t.BuildArgs
