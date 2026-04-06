@@ -1,10 +1,9 @@
 package config
 
 type Config struct {
-	Namespace string                    `yaml:"namespace"`
-	Setup     []SetupStep              `yaml:"setup,omitempty"`
-	Cluster   map[string]ClusterConfig `yaml:"cluster,omitempty"`
-	Services  map[string]ServiceConfig `yaml:"services,omitempty"`
+	Setup    []SetupStep              `yaml:"setup,omitempty"`
+	Cluster  map[string]ClusterConfig `yaml:"cluster,omitempty"`
+	Services map[string]ServiceConfig `yaml:"services,omitempty"`
 	// Deprecated: use Services. Kept for backward compat — merged into Services during load.
 	Infra map[string]ServiceConfig `yaml:"infra,omitempty"`
 	Apps  map[string]ServiceConfig `yaml:"apps,omitempty"`
@@ -18,10 +17,11 @@ type SetupStep struct {
 }
 
 type ClusterConfig struct {
-	Context  string          `yaml:"context,omitempty"`
-	Provider string          `yaml:"provider,omitempty"`
-	Registry *RegistryConfig `yaml:"registry,omitempty"`
-	Platform []string        `yaml:"platform,omitempty"`
+	Context   string          `yaml:"context,omitempty"`
+	Namespace string          `yaml:"namespace,omitempty"`
+	Provider  string          `yaml:"provider,omitempty"`
+	Registry  *RegistryConfig `yaml:"registry,omitempty"`
+	Platform  []string        `yaml:"platform,omitempty"`
 }
 
 type RegistryConfig struct {

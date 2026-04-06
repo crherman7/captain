@@ -1,8 +1,7 @@
-namespace: hello
-
 cluster:
   local:
     context: k3d-hello
+    namespace: hello
     registry:
       push: localhost:5001
       pull: hello-registry:5000

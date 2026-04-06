@@ -42,8 +42,10 @@ func (c *Config) merge() {
 }
 
 func (c *Config) Validate() error {
-	if c.Namespace == "" {
-		return fmt.Errorf("namespace is required")
+	for name, cc := range c.Cluster {
+		if cc.Namespace == "" {
+			return fmt.Errorf("cluster %q: namespace is required", name)
+		}
 	}
 
 	// Validate setup steps

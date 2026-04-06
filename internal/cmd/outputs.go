@@ -22,6 +22,12 @@ func newOutputsCmd() *cobra.Command {
 				return err
 			}
 
+			cluster := cfg.GetCluster(stack)
+			ns := ""
+			if cluster != nil {
+				ns = cluster.Namespace
+			}
+
 			r := resolver.New(os.LookupEnv)
 
 			fmt.Fprintln(os.Stderr) //nolint:errcheck
@@ -33,7 +39,7 @@ func newOutputsCmd() *cobra.Command {
 
 				ctx := resolver.ResolveContext{
 					ServiceName: name,
-					Namespace:   cfg.Namespace,
+					Namespace:   ns,
 				}
 
 				resolved, err := r.ResolveStringMap(svc.Exposes, ctx)

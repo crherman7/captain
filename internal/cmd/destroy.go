@@ -66,7 +66,11 @@ func newDestroyCmd() *cobra.Command {
 			var errs []error
 			for _, name := range sorted {
 				ui.ServiceStart(name, "uninstalling...")
-				if err := deployer.Uninstall(cmd.Context(), name, cfg.Namespace); err != nil {
+				ns := ""
+				if cluster != nil {
+					ns = cluster.Namespace
+				}
+				if err := deployer.Uninstall(cmd.Context(), name, ns); err != nil {
 					ui.ServiceDone(name, "✗", "failed")
 					ui.Error(err)
 					errs = append(errs, fmt.Errorf("%s: %w", name, err))

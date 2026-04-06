@@ -128,6 +128,13 @@ func (p *Pipeline) kubeContext() string {
 	return ""
 }
 
+func (p *Pipeline) namespace() string {
+	if p.Cluster != nil {
+		return p.Cluster.Namespace
+	}
+	return ""
+}
+
 func (p *Pipeline) buildPlatform(svcPlatform []string) []string {
 	if len(svcPlatform) > 0 {
 		return svcPlatform
@@ -160,7 +167,7 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 		svc := p.Config.Services[name]
 		ctx := resolver.ResolveContext{
 			ServiceName: name,
-			Namespace:   p.Config.Namespace,
+			Namespace:   p.namespace(),
 			Exposed:     make(map[string]string),
 		}
 
@@ -343,7 +350,7 @@ func (p *Pipeline) Execute(ctx context.Context, actions []PlannedAction, ui UI) 
 	// Ensure registry secret exists before deploying
 	if p.Cluster != nil && p.Cluster.Registry != nil && p.Cluster.Registry.NeedsSecret() {
 		ui.ServiceStart("registry", "creating secret...")
-		secretName, err := deploy.EnsureRegistrySecret(ctx, p.Cluster.Registry, p.Config.Namespace, p.kubeContext())
+		secretName, err := deploy.EnsureRegistrySecret(ctx, p.Cluster.Registry, p.namespace(), p.kubeContext())
 		if err != nil {
 			ui.ServiceDone("registry", "✗", "failed")
 			return fmt.Errorf("registry secret: %w", err)
@@ -427,7 +434,7 @@ func (p *Pipeline) Execute(ctx context.Context, actions []PlannedAction, ui UI) 
 				key := "deploy/" + action.ServiceName
 
 				// Create <name>-env secret
-				if err := deploy.EnsureAppSecret(layerCtx, action.ServiceName, p.Config.Namespace, p.kubeContext(), action.EnvSecretData); err != nil {
+				if err := deploy.EnsureAppSecret(layerCtx, action.ServiceName, p.namespace(), p.kubeContext(), action.EnvSecretData); err != nil {
 					ui.ServiceDone(key, "✗", "secret failed")
 					return fmt.Errorf("creating secret for %s: %w", action.ServiceName, err)
 				}
@@ -435,7 +442,7 @@ func (p *Pipeline) Execute(ctx context.Context, actions []PlannedAction, ui UI) 
 				svc := p.Config.Services[action.ServiceName]
 				rel := deploy.Release{
 					Name:      action.ServiceName,
-					Namespace: p.Config.Namespace,
+					Namespace: p.namespace(),
 					Chart:     svc.Chart,
 					Values:    action.Values,
 				}

@@ -7,7 +7,10 @@ import (
 
 func TestLoadFromReader_Valid(t *testing.T) {
 	input := `
-namespace: test
+cluster:
+  local:
+    context: k3d-test
+    namespace: test
 services:
   postgres:
     chart: deploy/infra/postgres
@@ -26,8 +29,9 @@ services:
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("unexpected validation error: %v", err)
 	}
-	if cfg.Namespace != "test" {
-		t.Errorf("namespace = %q, want %q", cfg.Namespace, "test")
+	local := cfg.GetCluster("local")
+	if local == nil || local.Namespace != "test" {
+		t.Errorf("cluster local namespace = %q, want %q", local.Namespace, "test")
 	}
 	if len(cfg.Services) != 2 {
 		t.Errorf("services count = %d, want 2", len(cfg.Services))
@@ -39,7 +43,6 @@ services:
 
 func TestLoadFromReader_BackwardCompat(t *testing.T) {
 	input := `
-namespace: test
 infra:
   postgres:
     chart: deploy/infra/postgres
@@ -62,6 +65,9 @@ apps:
 
 func TestLoadFromReader_MissingNamespace(t *testing.T) {
 	input := `
+cluster:
+  local:
+    context: k3d-test
 services:
   redis:
     chart: deploy/infra/redis
@@ -71,13 +77,12 @@ services:
 		t.Fatalf("unexpected parse error: %v", err)
 	}
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected validation error for missing namespace")
+		t.Fatal("expected validation error for missing namespace on cluster")
 	}
 }
 
 func TestLoadFromReader_MissingChart(t *testing.T) {
 	input := `
-namespace: test
 services:
   redis: {}
 `
@@ -92,7 +97,6 @@ services:
 
 func TestValidate_DanglingReference(t *testing.T) {
 	input := `
-namespace: test
 services:
   api:
     chart: deploy/apps/api
@@ -113,7 +117,6 @@ services:
 
 func TestValidate_SetupSteps(t *testing.T) {
 	input := `
-namespace: test
 setup:
   - name: create-cluster
     check: k3d cluster list | grep -q test
@@ -138,7 +141,6 @@ services:
 
 func TestValidate_SetupMissingName(t *testing.T) {
 	input := `
-namespace: test
 setup:
   - run: echo hello
 `
@@ -154,7 +156,6 @@ setup:
 
 func TestValidate_SetupMissingRun(t *testing.T) {
 	input := `
-namespace: test
 setup:
   - name: broken
     check: true
@@ -171,7 +172,6 @@ setup:
 
 func TestValidate_SetupDuplicateName(t *testing.T) {
 	input := `
-namespace: test
 setup:
   - name: step1
     run: echo a
@@ -190,7 +190,6 @@ setup:
 
 func TestValidate_DisabledService(t *testing.T) {
 	input := `
-namespace: test
 services:
   debug:
     chart: deploy/debug
@@ -212,7 +211,6 @@ services:
 
 func TestGetCluster(t *testing.T) {
 	input := `
-namespace: test
 cluster:
   local:
     context: k3d-test
@@ -263,7 +261,6 @@ services:
 
 func TestGetCluster_SingleAutoSelect(t *testing.T) {
 	input := `
-namespace: test
 cluster:
   local:
     context: k3d-test
