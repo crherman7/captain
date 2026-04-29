@@ -30,5 +30,5 @@ func isInteractive() bool {
 	if os.Getenv("CI") != "" {
 		return false
 	}
-	return term.IsTerminal(int(os.Stderr.Fd()))
+	return term.IsTerminal(int(os.Stdout.Fd()))
 }

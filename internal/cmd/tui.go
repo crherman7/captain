@@ -95,6 +95,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd()
 
 	case tea.WindowSizeMsg:
+		tuiDebugf("window-size width=%d height=%d ready=%t pending=%d lines=%d", msg.Width, msg.Height, m.ready, len(m.pending), len(m.lines))
 		if !m.ready {
 			m.ready = true
 			for _, pending := range m.pending {
@@ -106,6 +107,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msgHeader, msgServiceStart, msgServiceUpdate, msgServiceDone, msgServiceSkip, msgError:
 		if !m.ready {
+			tuiDebugf("buffer msg=%T pending=%d lines=%d", msg, len(m.pending)+1, len(m.lines))
 			m.pending = append(m.pending, msg)
 			return m, nil
 		}
@@ -127,12 +129,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m tuiModel) applyMessage(msg tea.Msg) tuiModel {
 	switch msg := msg.(type) {
 	case msgHeader:
+		tuiDebugf("apply header text=%q lines_before=%d", msg.text, len(m.lines))
 		m.lines = append(m.lines, tuiLine{
 			kind: lineKindHeader,
 			text: msg.text,
 		})
 
 	case msgServiceStart:
+		tuiDebugf("apply start key=%q display=%q exists=%t lines_before=%d", msg.name, displayName(msg.name), hasKey(m.index, msg.name), len(m.lines))
 		if idx, ok := m.index[msg.name]; ok {
 			m.lines[idx].status = lineSpinning
 			m.lines[idx].message = msg.message
@@ -149,11 +153,13 @@ func (m tuiModel) applyMessage(msg tea.Msg) tuiModel {
 		}
 
 	case msgServiceUpdate:
+		tuiDebugf("apply update key=%q display=%q exists=%t", msg.name, displayName(msg.name), hasKey(m.index, msg.name))
 		if idx, ok := m.index[msg.name]; ok {
 			m.lines[idx].message = msg.message
 		}
 
 	case msgServiceDone:
+		tuiDebugf("apply done key=%q display=%q exists=%t", msg.name, displayName(msg.name), hasKey(m.index, msg.name))
 		if idx, ok := m.index[msg.name]; ok {
 			m.lines[idx].status = lineDone
 			m.lines[idx].icon = msg.icon
@@ -162,6 +168,7 @@ func (m tuiModel) applyMessage(msg tea.Msg) tuiModel {
 		}
 
 	case msgServiceSkip:
+		tuiDebugf("apply skip key=%q display=%q exists=%t lines_before=%d", msg.name, displayName(msg.name), hasKey(m.index, msg.name), len(m.lines))
 		if idx, ok := m.index[msg.name]; ok {
 			m.lines[idx].status = lineSkipped
 			m.lines[idx].message = msg.message
@@ -178,10 +185,16 @@ func (m tuiModel) applyMessage(msg tea.Msg) tuiModel {
 		}
 
 	case msgError:
+		tuiDebugf("apply error err=%q", msg.err.Error())
 		m.errMsg = msg.err.Error()
 	}
 
 	return m
+}
+
+func hasKey(index map[string]int, key string) bool {
+	_, ok := index[key]
+	return ok
 }
 
 func (m tuiModel) View() string {
@@ -248,7 +261,7 @@ type tui struct {
 // NewTUI creates a bubbletea-powered interactive UI.
 func NewTUI() UI {
 	model := newTuiModel()
-	p := tea.NewProgram(model, tea.WithOutput(os.Stderr))
+	p := tea.NewProgram(model, tea.WithOutput(os.Stdout))
 
 	t := &tui{
 		program: p,

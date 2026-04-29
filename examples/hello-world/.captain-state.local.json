@@ -1,0 +1,20 @@
+{
+  "services": {
+    "api": {
+      "hash": "ea72f36afd880c4be25a9899989e84c693e8f2670f291627f32dbdf960f1afc3",
+      "buildHash": "2fd0143c2fd798355deb9e6ef206155672c62d4d850d43efc0ef1f114d61a79d",
+      "deployedAt": "2026-04-29T11:12:46.244587-04:00",
+      "imageTag": "localhost:5001/api:2fd0143c2fd7"
+    },
+    "postgres": {
+      "hash": "c73043da5e3c7e8b9c96e18e71f1d631b17bd5e879d1d910146b76e0ec21d7b2",
+      "deployedAt": "2026-04-29T11:12:39.977678-04:00"
+    },
+    "web": {
+      "hash": "037785e04cc6152c9b185b5849cd347fb91aac73a5ee4466508ea6af481235f4",
+      "buildHash": "fd8f4bea4f57da551a3d24a2cbfada8a635d00fdd7bcb402807093382bbd614a",
+      "deployedAt": "2026-04-29T11:12:23.996238-04:00",
+      "imageTag": "localhost:5001/web:fd8f4bea4f57"
+    }
+  }
+}

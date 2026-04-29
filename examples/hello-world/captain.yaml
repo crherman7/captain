@@ -39,7 +39,7 @@ services:
     chart: deploy/apps/api
     build:
       context: services/api
-      platform: linux/arm64
+      platform: [linux/arm64]
     references: [postgres]
     values:
       ingress:
@@ -49,7 +49,7 @@ services:
     chart: deploy/apps/web
     build:
       context: services/web
-      platform: linux/arm64
+      platform: [linux/arm64]
     values:
       ingress:
         host: 127.0.0.1.sslip.io
