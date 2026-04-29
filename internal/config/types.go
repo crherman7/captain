@@ -63,6 +63,15 @@ type ServiceConfig struct {
 	Exposes    map[string]string      `yaml:"exposes,omitempty"`
 	References []string               `yaml:"references,omitempty"`
 	Secrets    map[string]string      `yaml:"secrets,omitempty"`
+	// ExposeEnv controls whether referenced services' exposed values are injected
+	// as a top-level env map. Defaults to true. Set to false for infra charts that
+	// reference other services only for deploy ordering, not for env consumption.
+	ExposeEnv *bool `yaml:"exposeEnv,omitempty"`
+}
+
+// ShouldInjectEnv returns true if exposed values should be injected as top-level env.
+func (s *ServiceConfig) ShouldInjectEnv() bool {
+	return s.ExposeEnv == nil || *s.ExposeEnv
 }
 
 type BuildConfig struct {

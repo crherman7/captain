@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -254,22 +255,37 @@ func (m tuiModel) View() string {
 // --- TUI wrapper implementing UI interface ---
 
 type tui struct {
-	program *tea.Program
-	done    chan struct{}
+	program  *tea.Program
+	done     chan struct{}
+	mu       sync.RWMutex
+	final    string
+	warnings *tuiWarningCollector
+	stdlog   *tuiStdLogCapture
 }
 
 // NewTUI creates a bubbletea-powered interactive UI.
 func NewTUI() UI {
 	model := newTuiModel()
-	p := tea.NewProgram(model, tea.WithOutput(os.Stdout))
+	p := tea.NewProgram(
+		model,
+		tea.WithAltScreen(),
+		tea.WithOutput(os.Stdout),
+	)
 
 	t := &tui{
-		program: p,
-		done:    make(chan struct{}),
+		program:  p,
+		done:     make(chan struct{}),
+		warnings: installTUIWarningHandler(),
+		stdlog:   installTUIStdLogCapture(),
 	}
 
 	go func() {
-		_, _ = p.Run()
+		finalModel, _ := p.Run()
+		if model, ok := finalModel.(tuiModel); ok {
+			t.mu.Lock()
+			t.final = model.View()
+			t.mu.Unlock()
+		}
 		close(t.done)
 	}()
 
@@ -303,4 +319,22 @@ func (t *tui) Error(err error) {
 func (t *tui) Flush() {
 	t.program.Send(msgQuit{})
 	<-t.done
+	restoreDefaultWarningHandler()
+	if t.stdlog != nil {
+		t.stdlog.restore()
+	}
+
+	t.mu.RLock()
+	final := t.final
+	t.mu.RUnlock()
+
+	if final != "" {
+		_, _ = os.Stdout.WriteString(final)
+	}
+	if t.warnings != nil {
+		t.warnings.FlushTo(os.Stdout)
+	}
+	if t.stdlog != nil {
+		t.stdlog.FlushTo(os.Stdout)
+	}
 }

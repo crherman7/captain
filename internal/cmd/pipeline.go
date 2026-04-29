@@ -201,7 +201,7 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 			}
 		}
 
-		if len(ctx.Exposed) > 0 {
+		if len(ctx.Exposed) > 0 && svc.ShouldInjectEnv() {
 			envMap := make(map[string]interface{})
 			if existing, ok := resolvedValues["env"]; ok {
 				if m, ok := existing.(map[string]interface{}); ok {
