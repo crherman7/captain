@@ -9,6 +9,7 @@ import (
 	"strings"
 )
 
+// Target describes a single Docker image build.
 type Target struct {
 	Name       string
 	Context    string
@@ -19,24 +20,24 @@ type Target struct {
 	CacheRef   string
 }
 
+// Builder builds Docker images.
 type Builder interface {
 	Build(ctx context.Context, target Target) error
 	Bake(ctx context.Context, targets []Target) error
 }
 
+// BuildxBuilder builds images using docker buildx.
 type BuildxBuilder struct {
-	runner   CommandRunner
+	runner   *ExecRunner
 	OnOutput func(string)
 }
 
-type CommandRunner interface {
-	Run(ctx context.Context, name string, args ...string) ([]byte, error)
-}
-
-func NewBuildxBuilder(runner CommandRunner) *BuildxBuilder {
+// NewBuildxBuilder creates a BuildxBuilder backed by the given runner.
+func NewBuildxBuilder(runner *ExecRunner) *BuildxBuilder {
 	return &BuildxBuilder{runner: runner}
 }
 
+// Build builds a single image target.
 func (b *BuildxBuilder) Build(ctx context.Context, target Target) error {
 	args := []string{"buildx", "build", "--progress=plain"}
 
@@ -74,14 +75,7 @@ func (b *BuildxBuilder) Build(ctx context.Context, target Target) error {
 	}
 	args = append(args, buildContext)
 
-	if b.OnOutput != nil {
-		if r, ok := b.runner.(*ExecRunner); ok {
-			r.OnOutput = b.OnOutput
-			defer func() { r.OnOutput = nil }()
-		}
-	}
-
-	_, err := b.runner.Run(ctx, "docker", args...)
+	_, err := b.runner.Run(ctx, b.OnOutput, "docker", args...)
 	if err != nil {
 		return fmt.Errorf("building %s: %w", target.Name, err)
 	}
@@ -115,12 +109,10 @@ func (b *BuildxBuilder) Bake(ctx context.Context, targets []Target) error {
 		return nil
 	}
 
-	// Single target — just use regular build
 	if len(targets) == 1 {
 		return b.Build(ctx, targets[0])
 	}
 
-	// Generate bake file
 	var targetNames []string
 	bf := bakeFile{
 		Group:  make(map[string]bakeGroup),
@@ -160,7 +152,6 @@ func (b *BuildxBuilder) Bake(ctx context.Context, targets []Target) error {
 
 	bf.Group["default"] = bakeGroup{Targets: targetNames}
 
-	// Write bake file to temp dir
 	data, err := json.MarshalIndent(bf, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling bake file: %w", err)
@@ -177,17 +168,9 @@ func (b *BuildxBuilder) Bake(ctx context.Context, targets []Target) error {
 		return fmt.Errorf("writing bake file: %w", err)
 	}
 
-	// Run docker buildx bake
 	args := []string{"buildx", "bake", "--progress=plain", "-f", bakePath}
 
-	if b.OnOutput != nil {
-		if r, ok := b.runner.(*ExecRunner); ok {
-			r.OnOutput = b.OnOutput
-			defer func() { r.OnOutput = nil }()
-		}
-	}
-
-	_, err = b.runner.Run(ctx, "docker", args...)
+	_, err = b.runner.Run(ctx, b.OnOutput, "docker", args...)
 	if err != nil {
 		return fmt.Errorf("bake: %w", err)
 	}
@@ -200,15 +183,13 @@ func cacheRefArgs(ref string) (from, to string) {
 }
 
 // shouldPush returns true if the image tag references a remote registry.
-// It checks whether the first path segment looks like a registry hostname
-// (contains a dot or is "localhost"), indicating the image should be pushed.
 func shouldPush(imageTag string) bool {
 	if imageTag == "" {
 		return false
 	}
 	parts := strings.SplitN(imageTag, "/", 2)
 	if len(parts) < 2 {
-		return false // no slash means local image like "myapp:v1"
+		return false
 	}
 	host := parts[0]
 	return strings.Contains(host, ".") || strings.Contains(host, ":") || host == "localhost"

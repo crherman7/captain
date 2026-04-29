@@ -7,24 +7,23 @@ import (
 	"testing"
 )
 
-type mockRunner struct {
-	calls []mockCall
-	err   error
-}
-
 type mockCall struct {
 	Name string
 	Args []string
 }
 
-func (m *mockRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
-	m.calls = append(m.calls, mockCall{Name: name, Args: args})
-	return nil, m.err
+func newMockRunner(calls *[]mockCall, err error) *ExecRunner {
+	return &ExecRunner{
+		runFn: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			*calls = append(*calls, mockCall{Name: name, Args: args})
+			return nil, err
+		},
+	}
 }
 
 func TestBuildxBuilder_BasicBuild(t *testing.T) {
-	runner := &mockRunner{}
-	b := NewBuildxBuilder(runner)
+	var calls []mockCall
+	b := NewBuildxBuilder(newMockRunner(&calls, nil))
 
 	err := b.Build(context.Background(), Target{
 		Name:     "api",
@@ -35,11 +34,11 @@ func TestBuildxBuilder_BasicBuild(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(runner.calls) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(runner.calls))
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(calls))
 	}
 
-	call := runner.calls[0]
+	call := calls[0]
 	if call.Name != "docker" {
 		t.Errorf("command = %q, want %q", call.Name, "docker")
 	}
@@ -57,8 +56,8 @@ func TestBuildxBuilder_BasicBuild(t *testing.T) {
 }
 
 func TestBuildxBuilder_WithDockerfileAndPlatform(t *testing.T) {
-	runner := &mockRunner{}
-	b := NewBuildxBuilder(runner)
+	var calls []mockCall
+	b := NewBuildxBuilder(newMockRunner(&calls, nil))
 
 	err := b.Build(context.Background(), Target{
 		Name:       "api",
@@ -71,7 +70,7 @@ func TestBuildxBuilder_WithDockerfileAndPlatform(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	args := strings.Join(runner.calls[0].Args, " ")
+	args := strings.Join(calls[0].Args, " ")
 	if !strings.Contains(args, "--file Dockerfile.prod") {
 		t.Errorf("expected --file in args: %s", args)
 	}
@@ -81,8 +80,8 @@ func TestBuildxBuilder_WithDockerfileAndPlatform(t *testing.T) {
 }
 
 func TestBuildxBuilder_WithCacheRef(t *testing.T) {
-	runner := &mockRunner{}
-	b := NewBuildxBuilder(runner)
+	var calls []mockCall
+	b := NewBuildxBuilder(newMockRunner(&calls, nil))
 
 	err := b.Build(context.Background(), Target{
 		Name:     "api",
@@ -94,7 +93,7 @@ func TestBuildxBuilder_WithCacheRef(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	args := strings.Join(runner.calls[0].Args, " ")
+	args := strings.Join(calls[0].Args, " ")
 	if !strings.Contains(args, "--cache-from type=registry,ref=registry.example.com/api:cache") {
 		t.Errorf("expected --cache-from in args: %s", args)
 	}
@@ -104,8 +103,8 @@ func TestBuildxBuilder_WithCacheRef(t *testing.T) {
 }
 
 func TestBuildxBuilder_NoCacheRefByDefault(t *testing.T) {
-	runner := &mockRunner{}
-	b := NewBuildxBuilder(runner)
+	var calls []mockCall
+	b := NewBuildxBuilder(newMockRunner(&calls, nil))
 
 	err := b.Build(context.Background(), Target{
 		Name:     "api",
@@ -116,15 +115,15 @@ func TestBuildxBuilder_NoCacheRefByDefault(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	args := strings.Join(runner.calls[0].Args, " ")
+	args := strings.Join(calls[0].Args, " ")
 	if strings.Contains(args, "--cache-from") || strings.Contains(args, "--cache-to") {
 		t.Errorf("expected no cache flags when CacheRef is empty: %s", args)
 	}
 }
 
 func TestBuildxBuilder_Error(t *testing.T) {
-	runner := &mockRunner{err: fmt.Errorf("build failed")}
-	b := NewBuildxBuilder(runner)
+	var calls []mockCall
+	b := NewBuildxBuilder(newMockRunner(&calls, fmt.Errorf("build failed")))
 
 	err := b.Build(context.Background(), Target{
 		Name:    "api",

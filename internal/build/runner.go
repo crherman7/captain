@@ -16,16 +16,22 @@ var (
 	dockerTargetRe = regexp.MustCompile(`\[([a-zA-Z0-9_-]+)\s+`)
 )
 
-// ExecRunner executes commands, capturing output and optionally streaming lines
-// to an OnOutput callback.
+// ExecRunner executes shell commands.
+// Set runFn to intercept calls in tests without spawning real processes.
 type ExecRunner struct {
-	OnOutput func(string)
+	runFn func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
-func (e *ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+// Run executes the named command, streaming parsed output lines to onOutput when non-nil.
+// If runFn is set it is called instead of exec (onOutput is ignored in that case).
+func (e *ExecRunner) Run(ctx context.Context, onOutput func(string), name string, args ...string) ([]byte, error) {
+	if e.runFn != nil {
+		return e.runFn(ctx, name, args...)
+	}
+
 	cmd := exec.CommandContext(ctx, name, args...)
 
-	if e.OnOutput == nil {
+	if onOutput == nil {
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return out, fmt.Errorf("%s: %w\n%s", name, err, string(out))
@@ -60,7 +66,7 @@ func (e *ExecRunner) Run(ctx context.Context, name string, args ...string) ([]by
 		buf.WriteByte('\n')
 
 		if msg := parseBuildLine(line); msg != "" {
-			e.OnOutput(msg)
+			onOutput(msg)
 		}
 	}
 

@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/moby/patternmatcher v0.6.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sync v0.20.0
 	golang.org/x/term v0.41.0

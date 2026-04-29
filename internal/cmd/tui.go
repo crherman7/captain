@@ -132,14 +132,20 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case msgServiceSkip:
-		m.index[msg.name] = len(m.lines)
-		m.lines = append(m.lines, tuiLine{
-			kind:    lineKindService,
-			name:    displayName(msg.name),
-			status:  lineSkipped,
-			message: msg.message,
-			icon:    "-",
-		})
+		if idx, ok := m.index[msg.name]; ok {
+			m.lines[idx].status = lineSkipped
+			m.lines[idx].message = msg.message
+			m.lines[idx].icon = "-"
+		} else {
+			m.index[msg.name] = len(m.lines)
+			m.lines = append(m.lines, tuiLine{
+				kind:    lineKindService,
+				name:    displayName(msg.name),
+				status:  lineSkipped,
+				message: msg.message,
+				icon:    "-",
+			})
+		}
 		return m, nil
 
 	case msgError:

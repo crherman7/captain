@@ -87,7 +87,7 @@ func newDeployCmd() *cobra.Command {
 func runSetup(cmd *cobra.Command, cfg *config.Config, ui UI) error {
 	r := setup.NewRunner(stack)
 	return r.Run(cmd.Context(), cfg.Setup,
-		func(name string) { ui.ServiceSkip(name, "ready") },
+		func(name string) { ui.ServiceSkip(name, "skipped") },
 		func(name string) { ui.ServiceStart(name, "running...") },
 		func(name string) { ui.ServiceDone(name, "✔", "done") },
 	)

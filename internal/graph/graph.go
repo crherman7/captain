@@ -1,6 +1,10 @@
 package graph
 
-import "fmt"
+import (
+	"cmp"
+	"fmt"
+	"slices"
+)
 
 type Graph struct {
 	nodes map[string]bool
@@ -86,7 +90,7 @@ func (g *Graph) kahnSort() ([]string, error) {
 		}
 	}
 
-	sortStrings(queue)
+	slices.Sort(queue)
 
 	var result []string
 	for len(queue) > 0 {
@@ -97,7 +101,8 @@ func (g *Graph) kahnSort() ([]string, error) {
 		for _, dependent := range reverse[node] {
 			inDegree[dependent]--
 			if inDegree[dependent] == 0 {
-				queue = insertSorted(queue, dependent)
+				idx, _ := slices.BinarySearchFunc(queue, dependent, cmp.Compare)
+				queue = slices.Insert(queue, idx, dependent)
 			}
 		}
 	}
@@ -109,21 +114,3 @@ func (g *Graph) kahnSort() ([]string, error) {
 	return result, nil
 }
 
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
-}
-
-func insertSorted(s []string, v string) []string {
-	i := 0
-	for i < len(s) && s[i] < v {
-		i++
-	}
-	s = append(s, "")
-	copy(s[i+1:], s[i:])
-	s[i] = v
-	return s
-}
