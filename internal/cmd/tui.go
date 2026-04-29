@@ -64,10 +64,12 @@ type tuiLine struct {
 // --- Bubbletea model ---
 
 type tuiModel struct {
-	lines  []tuiLine
-	index  map[string]int // service name -> line index
-	frame  int
-	errMsg string
+	lines   []tuiLine
+	index   map[string]int // service name -> line index
+	pending []tea.Msg
+	ready   bool
+	frame   int
+	errMsg  string
 }
 
 func newTuiModel() tuiModel {
@@ -92,12 +94,43 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.frame++
 		return m, tickCmd()
 
+	case tea.WindowSizeMsg:
+		if !m.ready {
+			m.ready = true
+			for _, pending := range m.pending {
+				m = m.applyMessage(pending)
+			}
+			m.pending = nil
+		}
+		return m, nil
+
+	case msgHeader, msgServiceStart, msgServiceUpdate, msgServiceDone, msgServiceSkip, msgError:
+		if !m.ready {
+			m.pending = append(m.pending, msg)
+			return m, nil
+		}
+		m = m.applyMessage(msg)
+		return m, nil
+
+	case msgQuit:
+		return m, tea.Quit
+
+	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+	}
+
+	return m, nil
+}
+
+func (m tuiModel) applyMessage(msg tea.Msg) tuiModel {
+	switch msg := msg.(type) {
 	case msgHeader:
 		m.lines = append(m.lines, tuiLine{
 			kind: lineKindHeader,
 			text: msg.text,
 		})
-		return m, nil
 
 	case msgServiceStart:
 		if idx, ok := m.index[msg.name]; ok {
@@ -114,13 +147,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				started: time.Now(),
 			})
 		}
-		return m, nil
 
 	case msgServiceUpdate:
 		if idx, ok := m.index[msg.name]; ok {
 			m.lines[idx].message = msg.message
 		}
-		return m, nil
 
 	case msgServiceDone:
 		if idx, ok := m.index[msg.name]; ok {
@@ -129,7 +160,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lines[idx].message = msg.message
 			m.lines[idx].elapsed = time.Since(m.lines[idx].started)
 		}
-		return m, nil
 
 	case msgServiceSkip:
 		if idx, ok := m.index[msg.name]; ok {
@@ -146,22 +176,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				icon:    "-",
 			})
 		}
-		return m, nil
 
 	case msgError:
 		m.errMsg = msg.err.Error()
-		return m, nil
-
-	case msgQuit:
-		return m, tea.Quit
-
-	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
-		}
 	}
 
-	return m, nil
+	return m
 }
 
 func (m tuiModel) View() string {
