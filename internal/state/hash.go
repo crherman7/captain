@@ -13,8 +13,9 @@ import (
 	"github.com/moby/patternmatcher"
 )
 
-// ComputeHash produces a SHA-256 hash from resolved Helm values and an optional build context hash.
-func ComputeHash(values map[string]interface{}, buildHash string) (string, error) {
+// ComputeHash produces a SHA-256 hash from resolved Helm values, an optional build
+// context hash, and an optional chart directory hash.
+func ComputeHash(values map[string]interface{}, buildHash, chartHash string) (string, error) {
 	data, err := json.Marshal(values)
 	if err != nil {
 		return "", fmt.Errorf("marshaling values for hash: %w", err)
@@ -23,6 +24,50 @@ func ComputeHash(values map[string]interface{}, buildHash string) (string, error
 	h := sha256.New()
 	h.Write(data)
 	h.Write([]byte(buildHash))
+	h.Write([]byte(chartHash))
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// HashChart produces a deterministic hash of a Helm chart directory's contents.
+// All files under chartDir are hashed (templates, Chart.yaml, values.yaml, subcharts).
+func HashChart(chartDir string) (string, error) {
+	h := sha256.New()
+
+	var files []string
+	err := filepath.Walk(chartDir, func(path string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if fi.IsDir() {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("walking chart %s: %w", chartDir, err)
+	}
+
+	sort.Strings(files)
+
+	for _, path := range files {
+		rel, err := filepath.Rel(chartDir, path)
+		if err != nil {
+			return "", fmt.Errorf("rel path for %s: %w", path, err)
+		}
+		h.Write([]byte(filepath.ToSlash(rel)))
+
+		f, err := os.Open(path)
+		if err != nil {
+			return "", fmt.Errorf("reading %s: %w", path, err)
+		}
+		if _, err := io.Copy(h, f); err != nil {
+			_ = f.Close()
+			return "", fmt.Errorf("hashing %s: %w", path, err)
+		}
+		_ = f.Close()
+	}
+
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 

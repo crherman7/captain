@@ -102,12 +102,12 @@ func TestComputeHash_Deterministic(t *testing.T) {
 		"b": "2",
 	}
 
-	h1, err := ComputeHash(values, "tag1")
+	h1, err := ComputeHash(values, "tag1", "chart1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	h2, err := ComputeHash(values, "tag1")
+	h2, err := ComputeHash(values, "tag1", "chart1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,18 +121,25 @@ func TestComputeHash_DifferentInputs(t *testing.T) {
 	v1 := map[string]interface{}{"a": "1"}
 	v2 := map[string]interface{}{"a": "2"}
 
-	h1, _ := ComputeHash(v1, "tag")
-	h2, _ := ComputeHash(v2, "tag")
+	h1, _ := ComputeHash(v1, "tag", "chart")
+	h2, _ := ComputeHash(v2, "tag", "chart")
 
 	if h1 == h2 {
 		t.Error("expected different hashes for different values")
 	}
 
-	h3, _ := ComputeHash(v1, "tag1")
-	h4, _ := ComputeHash(v1, "tag2")
+	h3, _ := ComputeHash(v1, "tag1", "chart")
+	h4, _ := ComputeHash(v1, "tag2", "chart")
 
 	if h3 == h4 {
 		t.Error("expected different hashes for different image tags")
+	}
+
+	h5, _ := ComputeHash(v1, "tag", "chart1")
+	h6, _ := ComputeHash(v1, "tag", "chart2")
+
+	if h5 == h6 {
+		t.Error("expected different hashes for different chart hashes")
 	}
 }
 

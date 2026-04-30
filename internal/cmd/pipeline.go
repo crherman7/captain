@@ -311,7 +311,12 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 			resolvedValues["image"] = imageMap
 		}
 
-		hash, err := state.ComputeHash(resolvedValues, buildHash)
+		chartHash, err := state.HashChart(svc.Chart)
+		if err != nil {
+			return nil, fmt.Errorf("service %q chart hash: %w", name, err)
+		}
+
+		hash, err := state.ComputeHash(resolvedValues, buildHash, chartHash)
 		if err != nil {
 			return nil, fmt.Errorf("service %q hash: %w", name, err)
 		}
