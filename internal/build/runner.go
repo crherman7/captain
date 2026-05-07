@@ -7,114 +7,108 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"regexp"
 	"strings"
+	"sync"
 )
 
-var (
-	dockerStepRe   = regexp.MustCompile(`^#\d+\s+(.+)`)
-	dockerTargetRe = regexp.MustCompile(`\[([a-zA-Z0-9_-]+)\s+`)
-)
-
-// ExecRunner executes shell commands.
-// Set runFn to intercept calls in tests without spawning real processes.
+// ExecRunner executes shell commands. Set streamFn in tests to intercept calls
+// without spawning real processes.
 type ExecRunner struct {
-	runFn func(ctx context.Context, name string, args ...string) ([]byte, error)
+	streamFn func(ctx context.Context, name string, args []string, stdout, stderr io.Writer) error
 }
 
-// Run executes the named command, streaming parsed output lines to onOutput when non-nil.
-// If runFn is set it is called instead of exec (onOutput is ignored in that case).
-func (e *ExecRunner) Run(ctx context.Context, onOutput func(string), name string, args ...string) ([]byte, error) {
-	if e.runFn != nil {
-		return e.runFn(ctx, name, args...)
+// RunStreaming executes name with args, streaming each stdout and stderr line
+// to the corresponding callbacks (nil callbacks are ignored). It returns the
+// full captured stdout and stderr buffers along with any execution error.
+func (e *ExecRunner) RunStreaming(
+	ctx context.Context,
+	onStdout func(string),
+	onStderr func(string),
+	name string,
+	args ...string,
+) (stdoutAll, stderrAll []byte, err error) {
+	var stdoutBuf, stderrBuf bytes.Buffer
+
+	if e.streamFn != nil {
+		err := e.streamFn(ctx, name, args, &stdoutBuf, &stderrBuf)
+		if onStdout != nil {
+			emitLines(stdoutBuf.Bytes(), onStdout)
+		}
+		if onStderr != nil {
+			emitLines(stderrBuf.Bytes(), onStderr)
+		}
+		if err != nil {
+			return stdoutBuf.Bytes(), stderrBuf.Bytes(), fmt.Errorf("%s: %w", name, err)
+		}
+		return stdoutBuf.Bytes(), stderrBuf.Bytes(), nil
 	}
 
 	cmd := exec.CommandContext(ctx, name, args...)
 
-	if onOutput == nil {
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return out, fmt.Errorf("%s: %w\n%s", name, err, string(out))
-		}
-		return out, nil
-	}
-
-	var buf bytes.Buffer
-
-	stderr, err := cmd.StderrPipe()
+	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("creating stderr pipe: %w", err)
+		return nil, nil, fmt.Errorf("creating stdout pipe: %w", err)
 	}
-
-	stdout, err := cmd.StdoutPipe()
+	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return nil, fmt.Errorf("creating stdout pipe: %w", err)
+		return nil, nil, fmt.Errorf("creating stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("starting %s: %w", name, err)
+		return nil, nil, fmt.Errorf("starting %s: %w", name, err)
 	}
 
+	var wg sync.WaitGroup
+	wg.Add(2)
 	go func() {
-		_, _ = io.Copy(&buf, stdout)
+		defer wg.Done()
+		scanLines(stdoutPipe, &stdoutBuf, onStdout)
 	}()
+	go func() {
+		defer wg.Done()
+		scanLines(stderrPipe, &stderrBuf, onStderr)
+	}()
+	wg.Wait()
 
-	scanner := bufio.NewScanner(stderr)
+	if err := cmd.Wait(); err != nil {
+		return stdoutBuf.Bytes(), stderrBuf.Bytes(), fmt.Errorf("%s: %w", name, err)
+	}
+	return stdoutBuf.Bytes(), stderrBuf.Bytes(), nil
+}
+
+// scanLines reads r line-by-line into buf, optionally invoking onLine per line.
+// BuildKit's --progress=rawjson can emit long lines, so the scanner buffer is
+// generously sized.
+func scanLines(r io.Reader, buf *bytes.Buffer, onLine func(string)) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 4*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		buf.WriteString(line)
 		buf.WriteByte('\n')
-
-		if msg := parseBuildLine(line); msg != "" {
-			onOutput(msg)
+		if onLine != nil {
+			onLine(line)
 		}
 	}
-
-	if err := cmd.Wait(); err != nil {
-		return buf.Bytes(), fmt.Errorf("%s: %w\n%s", name, err, buf.String())
-	}
-
-	return buf.Bytes(), nil
 }
 
-// parseBuildLine extracts a human-readable status from a docker buildx output line.
-// For bake, the target name is embedded in the step: "[api build 6/6] RUN ..."
-// Returns "target:message" if a target is found, or just "message" otherwise.
-func parseBuildLine(line string) string {
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return ""
-	}
-
-	if m := dockerStepRe.FindStringSubmatch(line); len(m) > 1 {
-		msg := m[1]
-		if strings.HasPrefix(msg, "sha256:") || strings.HasPrefix(msg, "[auth]") {
-			return ""
+// emitLines splits buf on newlines and forwards each to onLine. Used by the
+// test-mock path where streamFn writes pre-baked output instead of streaming.
+func emitLines(buf []byte, onLine func(string)) {
+	for _, line := range strings.Split(string(buf), "\n") {
+		if line == "" {
+			continue
 		}
-		msg = strings.TrimSuffix(msg, " done")
-		msg = strings.TrimSuffix(msg, " DONE")
-
-		// Extract target name from "[targetname step]" pattern
-		if tm := dockerTargetRe.FindStringSubmatch(msg); len(tm) > 1 {
-			target := tm[1]
-			// Skip internal docker stages like "internal"
-			if target != "internal" {
-				return target + ":" + msg
-			}
-		}
-
-		return msg
+		onLine(line)
 	}
-
-	return ""
 }
 
-// ParseTargetMessage splits a "target:message" string from parseBuildLine.
-// Returns (target, message). If no target prefix, returns ("", original).
+// ParseTargetMessage splits a "target:message" string emitted by the rawjson
+// progress decoder. Returns (target, message). If no target prefix is present,
+// returns ("", original).
 func ParseTargetMessage(s string) (string, string) {
 	if idx := strings.Index(s, ":"); idx > 0 {
 		candidate := s[:idx]
-		// Only treat as target if it's a simple name (no spaces, no brackets)
 		if !strings.ContainsAny(candidate, " []") {
 			return candidate, s[idx+1:]
 		}

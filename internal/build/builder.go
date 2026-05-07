@@ -20,7 +20,9 @@ type Target struct {
 	CacheRef   string
 }
 
-// Builder builds Docker images.
+// Builder builds Docker images. On failure, the returned error is a
+// *BuildError carrying per-target failure detail when BuildKit output could be
+// parsed.
 type Builder interface {
 	Build(ctx context.Context, target Target) error
 	Bake(ctx context.Context, targets []Target) error
@@ -39,7 +41,7 @@ func NewBuildxBuilder(runner *ExecRunner) *BuildxBuilder {
 
 // Build builds a single image target.
 func (b *BuildxBuilder) Build(ctx context.Context, target Target) error {
-	args := []string{"buildx", "build", "--progress=plain"}
+	args := []string{"buildx", "build", "--progress=rawjson"}
 
 	if target.ImageTag != "" {
 		args = append(args, "--tag", target.ImageTag)
@@ -75,9 +77,12 @@ func (b *BuildxBuilder) Build(ctx context.Context, target Target) error {
 	}
 	args = append(args, buildContext)
 
-	_, err := b.runner.Run(ctx, b.OnOutput, "docker", args...)
+	dec := newProgressDecoder(b.OnOutput)
+	// buildx writes --progress=rawjson to stderr, not stdout.
+	stdout, stderr, err := b.runner.RunStreaming(ctx, nil, dec.HandleLine, "docker", args...)
 	if err != nil {
-		return fmt.Errorf("building %s: %w", target.Name, err)
+		failures := collectBuildFailures(dec, stdout, stderr, target.Name)
+		return &BuildError{Failures: failures, Err: fmt.Errorf("building %s: %w", target.Name, err)}
 	}
 	return nil
 }
@@ -168,11 +173,14 @@ func (b *BuildxBuilder) Bake(ctx context.Context, targets []Target) error {
 		return fmt.Errorf("writing bake file: %w", err)
 	}
 
-	args := []string{"buildx", "bake", "--progress=plain", "-f", bakePath}
+	args := []string{"buildx", "bake", "--progress=rawjson", "-f", bakePath}
 
-	_, err = b.runner.Run(ctx, b.OnOutput, "docker", args...)
+	dec := newProgressDecoder(b.OnOutput)
+	// buildx writes --progress=rawjson to stderr, not stdout.
+	stdout, stderr, err := b.runner.RunStreaming(ctx, nil, dec.HandleLine, "docker", args...)
 	if err != nil {
-		return fmt.Errorf("bake: %w", err)
+		failures := collectBuildFailures(dec, stdout, stderr, "")
+		return &BuildError{Failures: failures, Err: fmt.Errorf("bake: %w", err)}
 	}
 	return nil
 }

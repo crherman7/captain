@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 )
@@ -14,9 +15,9 @@ type mockCall struct {
 
 func newMockRunner(calls *[]mockCall, err error) *ExecRunner {
 	return &ExecRunner{
-		runFn: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		streamFn: func(_ context.Context, name string, args []string, _, _ io.Writer) error {
 			*calls = append(*calls, mockCall{Name: name, Args: args})
-			return nil, err
+			return err
 		},
 	}
 }

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -387,9 +388,7 @@ func (p *Pipeline) Execute(ctx context.Context, actions []PlannedAction, ui UI) 
 		}
 
 		if err := p.Builder.Bake(ctx, buildTargets); err != nil {
-			for _, t := range buildTargets {
-				ui.ServiceDone("build/"+t.Name, "✗", "build failed")
-			}
+			reportBuildFailures(ui, buildTargets, err, "build/")
 			return fmt.Errorf("building: %w", err)
 		}
 
@@ -483,4 +482,48 @@ func (p *Pipeline) Execute(ctx context.Context, actions []PlannedAction, ui UI) 
 	}
 
 	return nil
+}
+
+// reportBuildFailures attributes per-target failure messages to the UI.
+//
+// Three cases:
+//   - At least one failure names a real target → that target gets ✗ with the
+//     specific error; the other targets were cancelled by the bake when the
+//     sibling failed.
+//   - Failures exist but none name a real target (synthetic stderr-tail
+//     fallback for daemon/auth/push errors) → all targets are marked ✗ with
+//     a generic "build failed", and the global failure block is rendered by
+//     the UI's Error path.
+//   - No failures parsed at all → all targets ✗ "build failed".
+func reportBuildFailures(ui UI, targets []build.Target, err error, prefix string) {
+	failed := map[string]*build.BuildFailure{}
+	var be *build.BuildError
+	if errors.As(err, &be) {
+		for i := range be.Failures {
+			if be.Failures[i].Target == "" {
+				continue
+			}
+			failed[be.Failures[i].Target] = &be.Failures[i]
+		}
+	}
+	hasAttributedTarget := false
+	for _, t := range targets {
+		if _, ok := failed[t.Name]; ok {
+			hasAttributedTarget = true
+			break
+		}
+	}
+	for _, t := range targets {
+		if f := failed[t.Name]; f != nil {
+			msg := f.Error
+			if msg == "" {
+				msg = "build failed"
+			}
+			ui.ServiceDone(prefix+t.Name, "✗", msg)
+		} else if hasAttributedTarget {
+			ui.ServiceDone(prefix+t.Name, "-", "cancelled")
+		} else {
+			ui.ServiceDone(prefix+t.Name, "✗", "build failed")
+		}
+	}
 }

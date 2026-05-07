@@ -62,9 +62,7 @@ func newBuildCmd() *cobra.Command {
 			}
 
 			if err := builder.Bake(cmd.Context(), targets); err != nil {
-				for _, t := range targets {
-					ui.ServiceDone(t.Name, "✗", "build failed")
-				}
+				reportBuildFailures(ui, targets, err, "")
 				ui.Error(err)
 				return err
 			}

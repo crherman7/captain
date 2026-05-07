@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -8,6 +9,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/crherman7/captain/internal/build"
 )
 
 var (
@@ -65,12 +68,13 @@ type tuiLine struct {
 // --- Bubbletea model ---
 
 type tuiModel struct {
-	lines   []tuiLine
-	index   map[string]int // service name -> line index
-	pending []tea.Msg
-	ready   bool
-	frame   int
-	errMsg  string
+	lines         []tuiLine
+	index         map[string]int // service name -> line index
+	pending       []tea.Msg
+	ready         bool
+	frame         int
+	errMsg        string
+	buildFailures []build.BuildFailure
 }
 
 func newTuiModel() tuiModel {
@@ -187,7 +191,12 @@ func (m tuiModel) applyMessage(msg tea.Msg) tuiModel {
 
 	case msgError:
 		tuiDebugf("apply error err=%q", msg.err.Error())
-		m.errMsg = msg.err.Error()
+		var be *build.BuildError
+		if errors.As(msg.err, &be) && len(be.Failures) > 0 {
+			m.buildFailures = be.Failures
+		} else {
+			m.errMsg = msg.err.Error()
+		}
 	}
 
 	return m
@@ -239,6 +248,36 @@ func (m tuiModel) View() string {
 				b.WriteString(dimStyle.Render(line.message))
 			}
 			b.WriteString("\n")
+		}
+	}
+
+	if len(m.buildFailures) > 0 {
+		b.WriteString("\n")
+		for _, f := range m.buildFailures {
+			label := f.Target
+			if label == "" {
+				label = "build"
+			}
+			b.WriteString(redStyle.Render("  ✗ " + label))
+			if f.DockerfileAt != "" {
+				b.WriteString(dimStyle.Render("  " + f.DockerfileAt))
+			}
+			b.WriteString("\n")
+			if f.Step != "" {
+				b.WriteString(dimStyle.Render("    step: " + f.Step))
+				b.WriteString("\n")
+			}
+			if f.Snippet != "" {
+				for _, line := range strings.Split(f.Snippet, "\n") {
+					b.WriteString("    ")
+					b.WriteString(line)
+					b.WriteString("\n")
+				}
+			}
+			if f.Error != "" {
+				b.WriteString(redStyle.Render("    " + f.Error))
+				b.WriteString("\n")
+			}
 		}
 	}
 

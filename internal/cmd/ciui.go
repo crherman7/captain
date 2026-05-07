@@ -1,10 +1,14 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/crherman7/captain/internal/build"
 )
 
 // ciUI is a plain-text logger for CI environments and piped output.
@@ -59,6 +63,33 @@ func (c *ciUI) ServiceSkip(name, message string) {
 func (c *ciUI) Error(err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	var be *build.BuildError
+	if errors.As(err, &be) && len(be.Failures) > 0 {
+		fmt.Fprintln(c.w) //nolint:errcheck
+		for _, f := range be.Failures {
+			label := f.Target
+			if label == "" {
+				label = "build"
+			}
+			fmt.Fprintf(c.w, "  [error] %s", label) //nolint:errcheck
+			if f.DockerfileAt != "" {
+				fmt.Fprintf(c.w, "  %s", f.DockerfileAt) //nolint:errcheck
+			}
+			fmt.Fprintln(c.w) //nolint:errcheck
+			if f.Step != "" {
+				fmt.Fprintf(c.w, "    step: %s\n", f.Step) //nolint:errcheck
+			}
+			if f.Snippet != "" {
+				for _, line := range strings.Split(f.Snippet, "\n") {
+					fmt.Fprintf(c.w, "    %s\n", line) //nolint:errcheck
+				}
+			}
+			if f.Error != "" {
+				fmt.Fprintf(c.w, "    %s\n", f.Error) //nolint:errcheck
+			}
+		}
+		return
+	}
 	fmt.Fprintf(c.w, "\n  [error] %v\n", err) //nolint:errcheck
 }
 
