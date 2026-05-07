@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"slices"
 
 	"github.com/crherman7/captain/internal/config"
@@ -81,10 +80,6 @@ func newDestroyCmd() *cobra.Command {
 
 			if len(errs) > 0 {
 				return fmt.Errorf("failed to destroy %d service(s)", len(errs))
-			}
-
-			if err := os.Remove(stateFilePath()); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("removing state file: %w", err)
 			}
 
 			return nil

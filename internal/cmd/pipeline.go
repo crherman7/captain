@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -14,58 +13,32 @@ import (
 	"github.com/crherman7/captain/internal/config"
 	"github.com/crherman7/captain/internal/deploy"
 	"github.com/crherman7/captain/internal/graph"
+	"github.com/crherman7/captain/internal/hash"
 	"github.com/crherman7/captain/internal/resolver"
-	"github.com/crherman7/captain/internal/state"
 )
-
-type ActionStatus int
-
-const (
-	StatusUnchanged ActionStatus = iota
-	StatusNew
-	StatusChanged
-)
-
-func (s ActionStatus) String() string {
-	switch s {
-	case StatusUnchanged:
-		return "unchanged"
-	case StatusNew:
-		return "new"
-	case StatusChanged:
-		return "changed"
-	default:
-		return "unknown"
-	}
-}
 
 type PlannedAction struct {
 	ServiceName   string
-	Status        ActionStatus
 	Hash          string
-	BuildHash     string
 	Values        map[string]interface{}
 	EnvSecretData map[string]string
 	HasBuild      bool
-	NeedsBuild    bool
 	BuildTarget   build.Target
 }
 
 type Pipeline struct {
 	Config   *config.Config
 	Cluster  *config.ClusterConfig
-	State    *state.State
 	Resolver *resolver.Resolver
 	Builder  build.Builder
 	Deployer deploy.Deployer
 	Stack    string
 }
 
-func NewPipeline(cfg *config.Config, cluster *config.ClusterConfig, st *state.State, builder build.Builder, deployer deploy.Deployer, stack string) *Pipeline {
+func NewPipeline(cfg *config.Config, cluster *config.ClusterConfig, builder build.Builder, deployer deploy.Deployer, stack string) *Pipeline {
 	return &Pipeline{
 		Config:   cfg,
 		Cluster:  cluster,
-		State:    st,
 		Resolver: resolver.New(os.LookupEnv),
 		Builder:  builder,
 		Deployer: deployer,
@@ -251,7 +224,7 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 		var buildHash string
 
 		if hasBuild {
-			buildHash, err = state.HashBuildContext(svc.Build.Context, svc.Build.Dockerfile, svc.Build.Watch)
+			buildHash, err = hash.HashBuildContext(svc.Build.Context, svc.Build.Dockerfile, svc.Build.Watch)
 			if err != nil {
 				return nil, fmt.Errorf("service %q build hash: %w", name, err)
 			}
@@ -312,38 +285,24 @@ func (p *Pipeline) Plan() ([]PlannedAction, error) {
 			resolvedValues["image"] = imageMap
 		}
 
-		chartHash, err := state.HashChart(svc.Chart)
+		chartHash, err := hash.HashChart(svc.Chart)
 		if err != nil {
 			return nil, fmt.Errorf("service %q chart hash: %w", name, err)
 		}
 
-		hash, err := state.ComputeHash(resolvedValues, buildHash, chartHash)
+		// Compute the deploy hash *before* injecting captain.deployHash into
+		// values; otherwise it'd be self-referential.
+		serviceHash, err := hash.ComputeHash(resolvedValues, buildHash, chartHash)
 		if err != nil {
 			return nil, fmt.Errorf("service %q hash: %w", name, err)
 		}
 
-		status := StatusUnchanged
-		needsBuild := false
-		if _, exists := p.State.Services[name]; !exists {
-			status = StatusNew
-			needsBuild = hasBuild
-		} else if p.State.HasChanged(name, hash) {
-			status = StatusChanged
-			if hasBuild {
-				prev, _ := p.State.Get(name)
-				needsBuild = prev.BuildHash != buildHash
-			}
-		}
-
 		actions = append(actions, PlannedAction{
 			ServiceName:   name,
-			Status:        status,
-			Hash:          hash,
-			BuildHash:     buildHash,
+			Hash:          serviceHash,
 			Values:        resolvedValues,
 			EnvSecretData: envSecretData,
 			HasBuild:      hasBuild,
-			NeedsBuild:    needsBuild,
 			BuildTarget:   buildTarget,
 		})
 	}
@@ -364,10 +323,12 @@ func (p *Pipeline) Execute(ctx context.Context, actions []PlannedAction, ui UI) 
 		ui.ServiceDone("registry", "✔", secretName)
 	}
 
-	// Bake all builds in parallel with per-target status
+	// Bake all builds in parallel. buildx is content-addressed via the image
+	// tag (which is itself a build-context hash), so unchanged builds hit the
+	// registry/local cache and finish near-instantly.
 	var buildTargets []build.Target
 	for _, action := range actions {
-		if action.NeedsBuild {
+		if action.HasBuild {
 			buildTargets = append(buildTargets, action.BuildTarget)
 		}
 	}
@@ -429,11 +390,6 @@ func (p *Pipeline) Execute(ctx context.Context, actions []PlannedAction, ui UI) 
 				continue
 			}
 
-			if action.Status == StatusUnchanged {
-				ui.ServiceSkip("deploy/"+action.ServiceName, "unchanged")
-				continue
-			}
-
 			eg.Go(func() error {
 				key := "deploy/" + action.ServiceName
 
@@ -449,6 +405,7 @@ func (p *Pipeline) Execute(ctx context.Context, actions []PlannedAction, ui UI) 
 					Namespace: p.namespace(),
 					Chart:     svc.Chart,
 					Values:    action.Values,
+					Hash:      action.Hash,
 				}
 
 				ui.ServiceStart(key, "deploying...")
@@ -458,19 +415,17 @@ func (p *Pipeline) Execute(ctx context.Context, actions []PlannedAction, ui UI) 
 					ui.ServiceUpdate(key, "deploying "+msg)
 				}
 
-				if err := deployer.Deploy(layerCtx, rel); err != nil {
+				result, err := deployer.Deploy(layerCtx, rel)
+				if err != nil {
 					ui.ServiceDone(key, "✗", "deploy failed")
 					return fmt.Errorf("deploying %s: %w", action.ServiceName, err)
 				}
 
-				ui.ServiceDone(key, "✔", "deployed")
-
-				p.State.Update(action.ServiceName, state.ServiceState{
-					Hash:       action.Hash,
-					BuildHash:  action.BuildHash,
-					DeployedAt: time.Now(),
-					ImageTag:   action.BuildTarget.ImageTag,
-				})
+				if result.Changed {
+					ui.ServiceDone(key, "✔", fmt.Sprintf("deployed (rev %d)", result.Revision))
+				} else {
+					ui.ServiceDone(key, "✔", "unchanged")
+				}
 
 				return nil
 			})

@@ -3,7 +3,6 @@ package cmd
 import (
 	"github.com/crherman7/captain/internal/build"
 	"github.com/crherman7/captain/internal/config"
-	"github.com/crherman7/captain/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -21,13 +20,9 @@ func newBuildCmd() *cobra.Command {
 			}
 
 			cluster := cfg.GetCluster(stack)
-			st, err := state.Load(stateFilePath())
-			if err != nil {
-				return err
-			}
 
 			builder := build.NewBuildxBuilder(&build.ExecRunner{})
-			p := NewPipeline(cfg, cluster, st, builder, nil, stack)
+			p := NewPipeline(cfg, cluster, builder, nil, stack)
 
 			actions, err := p.Plan()
 			if err != nil {

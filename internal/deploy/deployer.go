@@ -19,10 +19,22 @@ type Release struct {
 	Namespace string
 	Chart     string
 	Values    map[string]interface{}
+	// Hash, if non-empty, is stamped under values["captain"]["deployHash"] so
+	// captain can skip subsequent deploys when nothing has changed. The
+	// previous release's hash is read back from the in-cluster release values.
+	Hash string
+}
+
+// DeployResult reports the outcome of a Deploy call.
+type DeployResult struct {
+	// Changed is false when the release already existed and its stored
+	// captain.deployHash matched rel.Hash, meaning no upgrade was performed.
+	Changed  bool
+	Revision int
 }
 
 type Deployer interface {
-	Deploy(ctx context.Context, rel Release) error
+	Deploy(ctx context.Context, rel Release) (DeployResult, error)
 	Uninstall(ctx context.Context, name, namespace string) error
 }
 
@@ -39,7 +51,7 @@ func NewHelmDeployer(kubeContext string) *HelmDeployer {
 	return &HelmDeployer{settings: settings}
 }
 
-func (h *HelmDeployer) Deploy(ctx context.Context, rel Release) error {
+func (h *HelmDeployer) Deploy(ctx context.Context, rel Release) (DeployResult, error) {
 	actionConfig := new(action.Configuration)
 
 	logger := func(_ string, _ ...interface{}) {}
@@ -62,13 +74,15 @@ func (h *HelmDeployer) Deploy(ctx context.Context, rel Release) error {
 		os.Getenv("HELM_DRIVER"),
 		logger,
 	); err != nil {
-		return fmt.Errorf("initializing helm: %w", err)
+		return DeployResult{}, fmt.Errorf("initializing helm: %w", err)
 	}
 
 	chart, err := loader.Load(rel.Chart)
 	if err != nil {
-		return fmt.Errorf("loading chart %s: %w", rel.Chart, err)
+		return DeployResult{}, fmt.Errorf("loading chart %s: %w", rel.Chart, err)
 	}
+
+	stampHash(rel.Values, rel.Hash)
 
 	// Check if release already exists to decide install vs upgrade
 	histClient := action.NewHistory(actionConfig)
@@ -89,7 +103,7 @@ func (h *HelmDeployer) Deploy(ctx context.Context, rel Release) error {
 			needsInstall = true
 		}
 	} else if err != nil && err != driver.ErrReleaseNotFound {
-		return fmt.Errorf("checking release %s: %w", rel.Name, err)
+		return DeployResult{}, fmt.Errorf("checking release %s: %w", rel.Name, err)
 	}
 
 	if needsInstall {
@@ -101,24 +115,56 @@ func (h *HelmDeployer) Deploy(ctx context.Context, rel Release) error {
 		install.Atomic = true
 		install.Timeout = 5 * time.Minute
 
-		if _, err := install.RunWithContext(ctx, chart, rel.Values); err != nil {
-			return fmt.Errorf("installing %s: %w", rel.Name, err)
+		installed, err := install.RunWithContext(ctx, chart, rel.Values)
+		if err != nil {
+			return DeployResult{}, fmt.Errorf("installing %s: %w", rel.Name, err)
 		}
-		return nil
+		return DeployResult{Changed: true, Revision: installed.Version}, nil
 	}
 
-	// Upgrade existing release
+	// Existing release — skip the upgrade if our stamped hash matches.
+	if rel.Hash != "" && len(releases) > 0 {
+		if storedHash(releases[len(releases)-1].Config) == rel.Hash {
+			return DeployResult{Changed: false, Revision: releases[len(releases)-1].Version}, nil
+		}
+	}
+
 	upgrade := action.NewUpgrade(actionConfig)
 	upgrade.Wait = true
 	upgrade.Atomic = true
 	upgrade.Timeout = 5 * time.Minute
 	upgrade.Namespace = rel.Namespace
 
-	if _, err := upgrade.RunWithContext(ctx, rel.Name, chart, rel.Values); err != nil {
-		return fmt.Errorf("upgrading %s: %w", rel.Name, err)
+	upgraded, err := upgrade.RunWithContext(ctx, rel.Name, chart, rel.Values)
+	if err != nil {
+		return DeployResult{}, fmt.Errorf("upgrading %s: %w", rel.Name, err)
 	}
+	return DeployResult{Changed: true, Revision: upgraded.Version}, nil
+}
 
-	return nil
+// stampHash injects the captain.deployHash marker into values so it is stored
+// in the helm release and readable on the next deploy.
+func stampHash(values map[string]interface{}, hash string) {
+	if hash == "" {
+		return
+	}
+	cap, _ := values["captain"].(map[string]interface{})
+	if cap == nil {
+		cap = map[string]interface{}{}
+		values["captain"] = cap
+	}
+	cap["deployHash"] = hash
+}
+
+// storedHash returns the captain.deployHash value previously stamped into a
+// release's values, or "" if absent.
+func storedHash(values map[string]interface{}) string {
+	cap, ok := values["captain"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	h, _ := cap["deployHash"].(string)
+	return h
 }
 
 func (h *HelmDeployer) Uninstall(_ context.Context, name, namespace string) error {
