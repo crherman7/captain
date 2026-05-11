@@ -2,9 +2,9 @@ package deploy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"helm.sh/helm/v3/pkg/action"
@@ -12,6 +12,7 @@ import (
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage/driver"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 type Release struct {
@@ -33,6 +34,28 @@ type DeployResult struct {
 	Revision int
 }
 
+// StatusUpdate is a structured per-poll snapshot of a release in flight.
+// It's emitted via HelmDeployer.OnStatus so the UI doesn't have to parse
+// English log strings.
+type StatusUpdate struct {
+	// Action is what captain is doing right now: "installing", "upgrading",
+	// "rolling back", or "uninstalling".
+	Action string
+
+	// Helm is the raw helm release status (deployed, pending-*, failed, ...).
+	Helm release.Status
+
+	// Description mirrors release.Info.Description — free-form English from
+	// helm, useful as a fallback display string.
+	Description string
+
+	// ReadyPods / TotalPods are aggregated across Deployments and
+	// StatefulSets in the release. TotalPods == 0 means no workloads were
+	// found in the release manifest yet.
+	ReadyPods int
+	TotalPods int
+}
+
 type Deployer interface {
 	Deploy(ctx context.Context, rel Release) (DeployResult, error)
 	Uninstall(ctx context.Context, name, namespace string) error
@@ -40,7 +63,9 @@ type Deployer interface {
 
 type HelmDeployer struct {
 	settings *cli.EnvSettings
-	OnOutput func(string)
+	// OnStatus is invoked roughly every 500ms during an install/upgrade with a
+	// snapshot polled from the helm SDK. Optional.
+	OnStatus func(StatusUpdate)
 }
 
 func NewHelmDeployer(kubeContext string) *HelmDeployer {
@@ -54,25 +79,13 @@ func NewHelmDeployer(kubeContext string) *HelmDeployer {
 func (h *HelmDeployer) Deploy(ctx context.Context, rel Release) (DeployResult, error) {
 	actionConfig := new(action.Configuration)
 
-	logger := func(_ string, _ ...interface{}) {}
-	if h.OnOutput != nil {
-		logger = func(format string, v ...interface{}) {
-			msg := fmt.Sprintf(format, v...)
-			msg = parseHelmLog(msg)
-			if msg != "" {
-				h.OnOutput(msg)
-			}
-		}
-	}
-
-	// Set namespace on settings so RESTClientGetter uses it for all K8s API calls
 	h.settings.SetNamespace(rel.Namespace)
 
 	if err := actionConfig.Init(
 		h.settings.RESTClientGetter(),
 		rel.Namespace,
 		os.Getenv("HELM_DRIVER"),
-		logger,
+		func(_ string, _ ...interface{}) {},
 	); err != nil {
 		return DeployResult{}, fmt.Errorf("initializing helm: %w", err)
 	}
@@ -84,20 +97,47 @@ func (h *HelmDeployer) Deploy(ctx context.Context, rel Release) (DeployResult, e
 
 	stampHash(rel.Values, rel.Hash)
 
-	// Check if release already exists to decide install vs upgrade
+	// Pull enough history to find a recoverable prior revision for the
+	// rollback path. Helm sorts oldest→newest.
 	histClient := action.NewHistory(actionConfig)
-	histClient.Max = 1
+	histClient.Max = 10
 	releases, err := histClient.Run(rel.Name)
 
 	needsInstall := err == driver.ErrReleaseNotFound
+	recovered := false
 
-	// If history exists but the release is in a stuck state, uninstall and reinstall
 	if err == nil && len(releases) > 0 {
-		status := releases[len(releases)-1].Info.Status
-		if status == release.StatusPendingInstall ||
-			status == release.StatusPendingUpgrade ||
-			status == release.StatusPendingRollback ||
-			status == release.StatusFailed {
+		latest := releases[len(releases)-1]
+		status := latest.Info.Status
+
+		switch {
+		case status == release.StatusFailed:
+			// Prefer rollback to a known-good revision; uninstall is
+			// destructive (drops helm-managed PVCs in some charts and the
+			// release history). Fall through to the normal upgrade path
+			// after rollback so the caller's new values get applied.
+			if rev := lastDeployedRevision(releases); rev > 0 {
+				h.emitStatus(StatusUpdate{Action: "rolling back", Helm: status})
+				rollback := action.NewRollback(actionConfig)
+				rollback.Version = rev
+				rollback.Wait = true
+				rollback.Timeout = 2 * time.Minute
+				if err := rollback.Run(rel.Name); err != nil {
+					return DeployResult{}, fmt.Errorf("rolling back %s to rev %d: %w", rel.Name, rev, err)
+				}
+				recovered = true
+			} else {
+				h.emitStatus(StatusUpdate{Action: "recovering", Helm: status})
+				uninstall := action.NewUninstall(actionConfig)
+				_, _ = uninstall.Run(rel.Name)
+				needsInstall = true
+			}
+		case status == release.StatusPendingInstall,
+			status == release.StatusPendingUpgrade,
+			status == release.StatusPendingRollback:
+			// Stuck mid-operation. Rollback can't unstick this — only an
+			// uninstall clears the pending lock.
+			h.emitStatus(StatusUpdate{Action: "recovering", Helm: status})
 			uninstall := action.NewUninstall(actionConfig)
 			_, _ = uninstall.Run(rel.Name)
 			needsInstall = true
@@ -115,15 +155,20 @@ func (h *HelmDeployer) Deploy(ctx context.Context, rel Release) (DeployResult, e
 		install.Atomic = true
 		install.Timeout = 5 * time.Minute
 
-		installed, err := install.RunWithContext(ctx, chart, rel.Values)
+		installed, err := h.runWithPolling(ctx, actionConfig, rel.Name, "installing", func(c context.Context) (*release.Release, error) {
+			return install.RunWithContext(c, chart, rel.Values)
+		})
 		if err != nil {
 			return DeployResult{}, fmt.Errorf("installing %s: %w", rel.Name, err)
 		}
 		return DeployResult{Changed: true, Revision: installed.Version}, nil
 	}
 
-	// Existing release — skip the upgrade if our stamped hash matches.
-	if rel.Hash != "" && len(releases) > 0 {
+	// Skip the hash-equality short-circuit if we just rolled back — the
+	// in-memory `releases` slice predates the rollback and may still show
+	// the failed revision with a matching hash, which would incorrectly
+	// mark the deploy as unchanged.
+	if !recovered && rel.Hash != "" && len(releases) > 0 {
 		if storedHash(releases[len(releases)-1].Config) == rel.Hash {
 			return DeployResult{Changed: false, Revision: releases[len(releases)-1].Version}, nil
 		}
@@ -135,15 +180,125 @@ func (h *HelmDeployer) Deploy(ctx context.Context, rel Release) (DeployResult, e
 	upgrade.Timeout = 5 * time.Minute
 	upgrade.Namespace = rel.Namespace
 
-	upgraded, err := upgrade.RunWithContext(ctx, rel.Name, chart, rel.Values)
+	upgraded, err := h.runWithPolling(ctx, actionConfig, rel.Name, "upgrading", func(c context.Context) (*release.Release, error) {
+		return upgrade.RunWithContext(c, rel.Name, chart, rel.Values)
+	})
 	if err != nil {
 		return DeployResult{}, fmt.Errorf("upgrading %s: %w", rel.Name, err)
 	}
 	return DeployResult{Changed: true, Revision: upgraded.Version}, nil
 }
 
-// stampHash injects the captain.deployHash marker into values so it is stored
-// in the helm release and readable on the next deploy.
+// runWithPolling executes work in a goroutine and, while it runs, polls
+// action.NewStatus every 500ms so the UI can show live release state.
+func (h *HelmDeployer) runWithPolling(
+	ctx context.Context,
+	actionConfig *action.Configuration,
+	name string,
+	actionLabel string,
+	work func(context.Context) (*release.Release, error),
+) (*release.Release, error) {
+	type result struct {
+		rel *release.Release
+		err error
+	}
+
+	h.emitStatus(StatusUpdate{Action: actionLabel, Helm: release.StatusPendingInstall})
+
+	resultCh := make(chan result, 1)
+	go func() {
+		rel, err := work(ctx)
+		resultCh <- result{rel, err}
+	}()
+
+	if h.OnStatus == nil {
+		r := <-resultCh
+		return r.rel, r.err
+	}
+
+	statusClient := action.NewStatus(actionConfig)
+	statusClient.ShowResources = true
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case r := <-resultCh:
+			return r.rel, r.err
+		case <-ticker.C:
+			rel, err := statusClient.Run(name)
+			if err != nil || rel == nil || rel.Info == nil {
+				continue
+			}
+			ready, total := countPods(rel.Info.Resources)
+			h.OnStatus(StatusUpdate{
+				Action:      actionLabel,
+				Helm:        rel.Info.Status,
+				Description: rel.Info.Description,
+				ReadyPods:   ready,
+				TotalPods:   total,
+			})
+		}
+	}
+}
+
+func (h *HelmDeployer) emitStatus(u StatusUpdate) {
+	if h.OnStatus != nil {
+		h.OnStatus(u)
+	}
+}
+
+// countPods aggregates ready/total pod counts across Deployments and
+// StatefulSets in a release's resource set. Resources is map[kind][]object;
+// we json-marshal each object to avoid a typed dependency on every k8s API
+// group/version helm might return.
+func countPods(resources map[string][]runtime.Object) (ready, total int) {
+	for _, objs := range resources {
+		for _, obj := range objs {
+			data, err := json.Marshal(obj)
+			if err != nil {
+				continue
+			}
+			var probe struct {
+				Kind string `json:"kind"`
+				Spec struct {
+					Replicas *int32 `json:"replicas"`
+				} `json:"spec"`
+				Status struct {
+					Replicas      int32 `json:"replicas"`
+					ReadyReplicas int32 `json:"readyReplicas"`
+				} `json:"status"`
+			}
+			if err := json.Unmarshal(data, &probe); err != nil {
+				continue
+			}
+			switch probe.Kind {
+			case "Deployment", "StatefulSet", "ReplicaSet":
+				want := int32(1)
+				if probe.Spec.Replicas != nil {
+					want = *probe.Spec.Replicas
+				}
+				total += int(want)
+				ready += int(probe.Status.ReadyReplicas)
+			}
+		}
+	}
+	return ready, total
+}
+
+// lastDeployedRevision returns the version of the most recent release in
+// history with status=deployed, or 0 if none exists. Helm history is sorted
+// oldest→newest, so we walk backwards.
+func lastDeployedRevision(releases []*release.Release) int {
+	for i := len(releases) - 1; i >= 0; i-- {
+		if releases[i].Info != nil && releases[i].Info.Status == release.StatusDeployed {
+			return releases[i].Version
+		}
+	}
+	return 0
+}
+
 func stampHash(values map[string]interface{}, hash string) {
 	if hash == "" {
 		return
@@ -156,8 +311,6 @@ func stampHash(values map[string]interface{}, hash string) {
 	cap["deployHash"] = hash
 }
 
-// storedHash returns the captain.deployHash value previously stamped into a
-// release's values, or "" if absent.
 func storedHash(values map[string]interface{}) string {
 	cap, ok := values["captain"].(map[string]interface{})
 	if !ok {
@@ -189,36 +342,4 @@ func (h *HelmDeployer) Uninstall(_ context.Context, name, namespace string) erro
 		return fmt.Errorf("uninstalling %s: %w", name, err)
 	}
 	return nil
-}
-
-// parseHelmLog extracts useful status from Helm SDK log lines.
-func parseHelmLog(msg string) string {
-	msg = strings.TrimSpace(msg)
-
-	// Surface deployment readiness status
-	if strings.Contains(msg, "not ready") {
-		// "Deployment is not ready: default/api. 0 out of 1 expected pods are ready"
-		if idx := strings.Index(msg, "."); idx > 0 {
-			rest := strings.TrimSpace(msg[idx+1:])
-			if rest != "" {
-				return rest
-			}
-		}
-		return msg
-	}
-
-	// Surface wait progress
-	if strings.HasPrefix(msg, "beginning wait") {
-		return "waiting for resources..."
-	}
-	if strings.Contains(msg, "wait for resources succeeded") {
-		return "resources ready"
-	}
-
-	// Surface creating resources
-	if strings.HasPrefix(msg, "creating") && strings.Contains(msg, "resource") {
-		return msg
-	}
-
-	return ""
 }

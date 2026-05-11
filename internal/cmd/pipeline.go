@@ -411,8 +411,8 @@ func (p *Pipeline) Execute(ctx context.Context, actions []PlannedAction, ui UI) 
 				ui.ServiceStart(key, "deploying...")
 
 				deployer := deploy.NewHelmDeployer(p.kubeContext())
-				deployer.OnOutput = func(msg string) {
-					ui.ServiceUpdate(key, "deploying "+msg)
+				deployer.OnStatus = func(u deploy.StatusUpdate) {
+					ui.ServiceUpdate(key, formatDeployStatus(u))
 				}
 
 				result, err := deployer.Deploy(layerCtx, rel)
@@ -481,4 +481,20 @@ func reportBuildFailures(ui UI, targets []build.Target, err error, prefix string
 			ui.ServiceDone(prefix+t.Name, "✗", "build failed")
 		}
 	}
+}
+
+// formatDeployStatus renders a deploy.StatusUpdate as the short message
+// shown on a per-service TUI line, e.g. "deploying (2/3 pods ready)".
+func formatDeployStatus(u deploy.StatusUpdate) string {
+	action := u.Action
+	if action == "" {
+		action = "deploying"
+	}
+	if u.TotalPods > 0 {
+		return fmt.Sprintf("%s (%d/%d pods ready)", action, u.ReadyPods, u.TotalPods)
+	}
+	if u.Description != "" {
+		return action + " " + u.Description
+	}
+	return action
 }

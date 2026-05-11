@@ -6,8 +6,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 )
+
+// minBuildxMajor/Minor pin the lowest buildx release captain supports.
+// --progress=rawjson became the documented machine-readable progress format
+// in buildx v0.21 (Jan 2025); earlier versions either lacked it entirely or
+// emitted different fields. If we drop below this, the rawjson decoder may
+// silently lose data.
+const (
+	minBuildxMajor = 0
+	minBuildxMinor = 21
+)
+
+var buildxVersionRe = regexp.MustCompile(`v(\d+)\.(\d+)\.(\d+)`)
 
 // Target describes a single Docker image build.
 type Target struct {
@@ -30,8 +45,10 @@ type Builder interface {
 
 // BuildxBuilder builds images using docker buildx.
 type BuildxBuilder struct {
-	runner   *ExecRunner
-	OnOutput func(string)
+	runner       *ExecRunner
+	OnOutput     func(string)
+	versionOnce  sync.Once
+	versionErr   error
 }
 
 // NewBuildxBuilder creates a BuildxBuilder backed by the given runner.
@@ -41,6 +58,10 @@ func NewBuildxBuilder(runner *ExecRunner) *BuildxBuilder {
 
 // Build builds a single image target.
 func (b *BuildxBuilder) Build(ctx context.Context, target Target) error {
+	if err := b.verifyBuildxVersion(ctx); err != nil {
+		return err
+	}
+
 	args := []string{"buildx", "build", "--progress=rawjson"}
 
 	if target.ImageTag != "" {
@@ -118,6 +139,10 @@ func (b *BuildxBuilder) Bake(ctx context.Context, targets []Target) error {
 		return b.Build(ctx, targets[0])
 	}
 
+	if err := b.verifyBuildxVersion(ctx); err != nil {
+		return err
+	}
+
 	var targetNames []string
 	bf := bakeFile{
 		Group:  make(map[string]bakeGroup),
@@ -188,6 +213,41 @@ func (b *BuildxBuilder) Bake(ctx context.Context, targets []Target) error {
 // cacheRefArgs returns the --cache-from and --cache-to values for a registry cache ref.
 func cacheRefArgs(ref string) (from, to string) {
 	return "type=registry,ref=" + ref, "type=registry,ref=" + ref + ",mode=max"
+}
+
+// verifyBuildxVersion runs `docker buildx version` once and fails the build
+// if the installed buildx is older than minBuildxMajor.minBuildxMinor.
+// captain depends on --progress=rawjson, which only stabilized in v0.21.
+// Skipped when streamFn is set (test mocks).
+func (b *BuildxBuilder) verifyBuildxVersion(ctx context.Context) error {
+	if b.runner == nil || b.runner.streamFn != nil {
+		return nil
+	}
+	b.versionOnce.Do(func() {
+		stdout, stderr, err := b.runner.RunStreaming(ctx, nil, nil, "docker", "buildx", "version")
+		if err != nil {
+			b.versionErr = fmt.Errorf("running `docker buildx version`: %w", err)
+			return
+		}
+		out := string(stdout)
+		if out == "" {
+			out = string(stderr)
+		}
+		m := buildxVersionRe.FindStringSubmatch(out)
+		if m == nil {
+			b.versionErr = fmt.Errorf("could not parse buildx version from %q", strings.TrimSpace(out))
+			return
+		}
+		major, _ := strconv.Atoi(m[1])
+		minor, _ := strconv.Atoi(m[2])
+		if major < minBuildxMajor || (major == minBuildxMajor && minor < minBuildxMinor) {
+			b.versionErr = fmt.Errorf(
+				"buildx v%d.%d.x is too old; captain requires v%d.%d+ (for --progress=rawjson). Upgrade Docker Desktop or `docker buildx install`.",
+				major, minor, minBuildxMajor, minBuildxMinor,
+			)
+		}
+	})
+	return b.versionErr
 }
 
 // shouldPush returns true if the image tag references a remote registry.
